@@ -213,8 +213,9 @@ type connection struct {
 	timer *utils.Timer
 	// keepAlivePingSent stores whether a keep alive PING is in flight.
 	// It is reset as soon as we receive a packet from the peer.
-	keepAlivePingSent bool
-	keepAliveInterval time.Duration
+	keepAlivePingSent   bool
+	keepAliveInterval   time.Duration
+	timeStampPhaseShift int64 // used to calculate the one way delay
 
 	datagramQueue *datagramQueue
 
@@ -1515,7 +1516,7 @@ func (s *connection) handleHandshakeDoneFrame() error {
 }
 
 func (s *connection) handleAckFrame(frame *wire.AckFrame, encLevel protocol.EncryptionLevel) error {
-	acked1RTTPacket, err := s.sentPacketHandler.ReceivedAck(frame, encLevel, s.lastPacketReceivedTime)
+	acked1RTTPacket, sentTimeLargestAck, err := s.sentPacketHandler.ReceivedAck(frame, encLevel, s.lastPacketReceivedTime) //
 	if err != nil {
 		return err
 	}
@@ -1525,7 +1526,66 @@ func (s *connection) handleAckFrame(frame *wire.AckFrame, encLevel protocol.Encr
 	if s.perspective == protocol.PerspectiveClient && !s.handshakeConfirmed {
 		s.handleHandshakeConfirmed()
 	}
+
+	// calculate current one way delay
+	lastOWD := s.calcOneWayDelay(frame, sentTimeLargestAck)
+
+	// inform app of owd
+	if s.tracer != nil {
+		s.tracer.NewOneWayDelay(lastOWD)
+	}
+
 	return s.cryptoStreamHandler.SetLargest1RTTAcked(frame.LargestAcked())
+}
+
+// calculate current one way delay.
+// shiftedTimeStamp := frame.TimeStamp + startTime + phase_shift.
+// lastOWD := shiftedTimeStamp - send_time_packet
+func (s *connection) calcOneWayDelay(frame *wire.AckFrame, sentTimeLargestAck time.Time) uint64 {
+	// TODO: add correction checks like picoquic
+
+	// if no phaseShift known, estimate it with rtt/2
+	if s.timeStampPhaseShift == 0 { // TODO: what if phaseshift = 0 after calc; possible?
+		s.timeStampPhaseShift = s.rttStats.LatestRTT().Microseconds() / 2
+	}
+
+	is_time_stamp_valid := true
+	currentTime := time.Now().UnixMicro()
+	sentTime := sentTimeLargestAck.UnixMicro()
+	startTime := s.creationTime.UnixMicro()
+	timeStamp := int64(frame.TimeStamp)
+	shiftedTimeStamp := int64(frame.TimeStamp) + startTime + s.timeStampPhaseShift
+
+	// check correctness
+	if shiftedTimeStamp < 0 || shiftedTimeStamp < sentTime {
+		min_phase := sentTime - timeStamp - startTime
+		shiftedTimeStamp = timeStamp + startTime + min_phase
+
+		if shiftedTimeStamp > 0 && shiftedTimeStamp <= currentTime {
+			/* looks plausible -- the computed stamp is earlier than now. */
+			s.timeStampPhaseShift = min_phase
+		} else {
+			is_time_stamp_valid = false
+		}
+	} else if shiftedTimeStamp > currentTime {
+		max_phase := currentTime - timeStamp - startTime
+		shiftedTimeStamp = timeStamp + startTime + max_phase
+
+		if shiftedTimeStamp > 0 && shiftedTimeStamp >= sentTime {
+			/* looks plausible -- the computed stamp is earlier than now. */
+			s.timeStampPhaseShift = max_phase
+		} else {
+			is_time_stamp_valid = false
+		}
+	}
+
+	lastOWD := shiftedTimeStamp - sentTime
+	// TODO: what if timestamp not vaild
+	if !is_time_stamp_valid {
+		println("invalid ts")
+	}
+
+	return uint64(lastOWD)
 }
 
 func (s *connection) handleDatagramFrame(f *wire.DatagramFrame) error {

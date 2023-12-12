@@ -42,6 +42,7 @@ func ConvertAckFrame(f *wire.AckFrame) *logging.AckFrame {
 	ack := &logging.AckFrame{
 		AckRanges: ranges,
 		DelayTime: f.DelayTime,
+		TimeStamp: f.TimeStamp,
 		ECNCE:     f.ECNCE,
 		ECT0:      f.ECT0,
 		ECT1:      f.ECT1,

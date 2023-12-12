@@ -293,12 +293,12 @@ func (h *sentPacketHandler) sentPacketImpl(packet *Packet) bool /* is ack-elicit
 	return isAckEliciting
 }
 
-func (h *sentPacketHandler) ReceivedAck(ack *wire.AckFrame, encLevel protocol.EncryptionLevel, rcvTime time.Time) (bool /* contained 1-RTT packet */, error) {
+func (h *sentPacketHandler) ReceivedAck(ack *wire.AckFrame, encLevel protocol.EncryptionLevel, rcvTime time.Time) (bool /* contained 1-RTT packet */, time.Time, error) {
 	pnSpace := h.getPacketNumberSpace(encLevel)
 
 	largestAcked := ack.LargestAcked()
 	if largestAcked > pnSpace.largestSent {
-		return false, &qerr.TransportError{
+		return false, time.Time{}, &qerr.TransportError{
 			ErrorCode:    qerr.ProtocolViolation,
 			ErrorMessage: "received ACK for an unsent packet",
 		}
@@ -316,9 +316,9 @@ func (h *sentPacketHandler) ReceivedAck(ack *wire.AckFrame, encLevel protocol.En
 	}
 
 	priorInFlight := h.bytesInFlight
-	ackedPackets, err := h.detectAndRemoveAckedPackets(ack, encLevel)
+	ackedPackets, sentTimeLargestAck, err := h.detectAndRemoveAckedPackets(ack, encLevel)
 	if err != nil || len(ackedPackets) == 0 {
-		return false, err
+		return false, time.Time{}, err
 	}
 	// update the RTT, if the largest acked is newly acknowledged
 	if len(ackedPackets) > 0 {
@@ -336,7 +336,7 @@ func (h *sentPacketHandler) ReceivedAck(ack *wire.AckFrame, encLevel protocol.En
 		}
 	}
 	if err := h.detectLostPackets(rcvTime, encLevel); err != nil {
-		return false, err
+		return false, time.Time{}, err
 	}
 	var acked1RTTPacket bool
 	for _, p := range ackedPackets {
@@ -368,7 +368,7 @@ func (h *sentPacketHandler) ReceivedAck(ack *wire.AckFrame, encLevel protocol.En
 
 	pnSpace.history.DeleteOldPackets(rcvTime)
 	h.setLossDetectionTimer()
-	return acked1RTTPacket, nil
+	return acked1RTTPacket, sentTimeLargestAck, nil
 }
 
 func (h *sentPacketHandler) GetLowestPacketNotConfirmedAcked() protocol.PacketNumber {
@@ -376,12 +376,15 @@ func (h *sentPacketHandler) GetLowestPacketNotConfirmedAcked() protocol.PacketNu
 }
 
 // Packets are returned in ascending packet number order.
-func (h *sentPacketHandler) detectAndRemoveAckedPackets(ack *wire.AckFrame, encLevel protocol.EncryptionLevel) ([]*Packet, error) {
+func (h *sentPacketHandler) detectAndRemoveAckedPackets(ack *wire.AckFrame, encLevel protocol.EncryptionLevel) ([]*Packet, time.Time, error) {
 	pnSpace := h.getPacketNumberSpace(encLevel)
 	h.ackedPackets = h.ackedPackets[:0]
 	ackRangeIndex := 0
 	lowestAcked := ack.LowestAcked()
 	largestAcked := ack.LargestAcked()
+	largestAckTS := time.Time{}
+	largestAckPN := int64(-1)
+
 	err := pnSpace.history.Iterate(func(p *Packet) (bool, error) {
 		// Ignore packets below the lowest acked
 		if p.PacketNumber < lowestAcked {
@@ -390,6 +393,12 @@ func (h *sentPacketHandler) detectAndRemoveAckedPackets(ack *wire.AckFrame, encL
 		// Break after largest acked is reached
 		if p.PacketNumber > largestAcked {
 			return false, nil
+		}
+		// get ts of largest ack-packet
+		// may not be the largest, if largest was a ack-only packet
+		if int64(p.PacketNumber) > largestAckPN {
+			largestAckTS = p.SendTime
+			largestAckPN = int64(p.PacketNumber)
 		}
 
 		if ack.HasMissingRanges() {
@@ -435,14 +444,14 @@ func (h *sentPacketHandler) detectAndRemoveAckedPackets(ack *wire.AckFrame, encL
 			}
 		}
 		if err := pnSpace.history.Remove(p.PacketNumber); err != nil {
-			return nil, err
+			return nil, time.Time{}, err
 		}
 		if h.tracer != nil {
 			h.tracer.AcknowledgedPacket(encLevel, p.PacketNumber)
 		}
 	}
 
-	return h.ackedPackets, err
+	return h.ackedPackets, largestAckTS, err
 }
 
 func (h *sentPacketHandler) getLossTimeAndSpace() (time.Time, protocol.EncryptionLevel) {

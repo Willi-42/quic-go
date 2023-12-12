@@ -64,7 +64,7 @@ var _ = Describe("Datagram test", func() {
 									defer wg.Done()
 									b := make([]byte, 8)
 									binary.BigEndian.PutUint64(b, uint64(i))
-									Expect(conn.SendMessage(b)).To(Succeed())
+									Expect(conn.SendMessage(b, nil)).To(Succeed())
 								}(i)
 							}
 							wg.Wait()
@@ -185,7 +185,7 @@ var _ = Describe("Datagram test", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(conn.ConnectionState().SupportsDatagrams).To(BeFalse())
 
-				Expect(conn.SendMessage([]byte{0})).To(HaveOccurred())
+				Expect(conn.SendMessage([]byte{0}, nil)).To(HaveOccurred())
 				conn.CloseWithError(0, "")
 				<-time.After(10 * time.Millisecond)
 			})

@@ -391,6 +391,8 @@ func (t *connectionTracer) UpdatedMetrics(rttStats *utils.RTTStats, cwnd, bytesI
 
 func (t *connectionTracer) AcknowledgedPacket(protocol.EncryptionLevel, protocol.PacketNumber) {}
 
+func (t *connectionTracer) NewOneWayDelay(uint64) {}
+
 func (t *connectionTracer) LostPacket(encLevel protocol.EncryptionLevel, pn protocol.PacketNumber, lossReason logging.PacketLossReason) {
 	t.mutex.Lock()
 	t.recordEvent(time.Now(), &eventPacketLost{

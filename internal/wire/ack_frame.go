@@ -17,6 +17,7 @@ var errInvalidAckRanges = errors.New("AckFrame: ACK frame contains invalid ACK r
 type AckFrame struct {
 	AckRanges []AckRange // has to be ordered. The highest ACK range goes first, the lowest ACK range goes last
 	DelayTime time.Duration
+	TimeStamp uint64
 
 	ECT0, ECT1, ECNCE uint64
 }
@@ -47,6 +48,12 @@ func parseAckFrame(r *bytes.Reader, ackDelayExponent uint8, _ protocol.VersionNu
 		delayTime = utils.InfDuration
 	}
 	frame.DelayTime = delayTime
+
+	timeStamp, err := quicvarint.Read(r)
+	if err != nil {
+		return nil, err
+	}
+	frame.TimeStamp = timeStamp
 
 	numBlocks, err := quicvarint.Read(r)
 	if err != nil {
@@ -116,6 +123,7 @@ func (f *AckFrame) Append(b []byte, _ protocol.VersionNumber) ([]byte, error) {
 	}
 	b = quicvarint.Append(b, uint64(f.LargestAcked()))
 	b = quicvarint.Append(b, encodeAckDelay(f.DelayTime))
+	b = quicvarint.Append(b, uint64(f.TimeStamp))
 
 	numRanges := f.numEncodableAckRanges()
 	b = quicvarint.Append(b, uint64(numRanges-1))
@@ -145,6 +153,8 @@ func (f *AckFrame) Length(_ protocol.VersionNumber) protocol.ByteCount {
 	numRanges := f.numEncodableAckRanges()
 
 	length := 1 + quicvarint.Len(uint64(largestAcked)) + quicvarint.Len(encodeAckDelay(f.DelayTime))
+
+	length += quicvarint.Len(f.TimeStamp)
 
 	length += quicvarint.Len(uint64(numRanges - 1))
 	lowestInFirstRange := f.AckRanges[0].Smallest

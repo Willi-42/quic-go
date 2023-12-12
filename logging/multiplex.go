@@ -164,6 +164,8 @@ func (m *connTracerMultiplexer) AcknowledgedPacket(encLevel EncryptionLevel, pn 
 	}
 }
 
+func (m *connTracerMultiplexer) NewOneWayDelay(uint64) {}
+
 func (m *connTracerMultiplexer) LostPacket(encLevel EncryptionLevel, pn PacketNumber, reason PacketLossReason) {
 	for _, t := range m.tracers {
 		t.LostPacket(encLevel, pn, reason)

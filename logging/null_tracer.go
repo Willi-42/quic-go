@@ -47,6 +47,7 @@ func (n NullConnectionTracer) DroppedPacket(PacketType, ByteCount, PacketDropRea
 func (n NullConnectionTracer) UpdatedMetrics(rttStats *RTTStats, cwnd, bytesInFlight ByteCount, packetsInFlight int) {
 }
 func (n NullConnectionTracer) AcknowledgedPacket(EncryptionLevel, PacketNumber)            {}
+func (n NullConnectionTracer) NewOneWayDelay(uint64)                                       {}
 func (n NullConnectionTracer) LostPacket(EncryptionLevel, PacketNumber, PacketLossReason)  {}
 func (n NullConnectionTracer) UpdatedCongestionState(CongestionState)                      {}
 func (n NullConnectionTracer) UpdatedPTOCount(uint32)                                      {}
