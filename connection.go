@@ -1516,7 +1516,7 @@ func (s *connection) handleHandshakeDoneFrame() error {
 }
 
 func (s *connection) handleAckFrame(frame *wire.AckFrame, encLevel protocol.EncryptionLevel) error {
-	acked1RTTPacket, sentTimeLargestAck, err := s.sentPacketHandler.ReceivedAck(frame, encLevel, s.lastPacketReceivedTime) //
+	acked1RTTPacket, sentTimeLargestAck, err := s.sentPacketHandler.ReceivedAck(frame, encLevel, s.lastPacketReceivedTime)
 	if err != nil {
 		return err
 	}
@@ -1538,14 +1538,11 @@ func (s *connection) handleAckFrame(frame *wire.AckFrame, encLevel protocol.Encr
 	return s.cryptoStreamHandler.SetLargest1RTTAcked(frame.LargestAcked())
 }
 
-// calculate current one way delay.
-// shiftedTimeStamp := frame.TimeStamp + startTime + phase_shift.
-// lastOWD := shiftedTimeStamp - send_time_packet
+// calcOneWayDelay calculates current one way delay.
+// Inspired by the one way delay calculation of https://github.com/private-octopus/picoquic
 func (s *connection) calcOneWayDelay(frame *wire.AckFrame, sentTimeLargestAck time.Time) uint64 {
-	// TODO: add correction checks like picoquic
-
 	// if no phaseShift known, estimate it with rtt/2
-	if s.timeStampPhaseShift == 0 { // TODO: what if phaseshift = 0 after calc; possible?
+	if s.timeStampPhaseShift == 0 {
 		s.timeStampPhaseShift = s.rttStats.LatestRTT().Microseconds() / 2
 	}
 
