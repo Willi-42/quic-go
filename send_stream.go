@@ -350,7 +350,7 @@ func (s *sendStream) getDataForWriting(f *wire.StreamFrame, maxBytes protocol.By
 	}
 }
 
-func (s *sendStream) frameAcked(f wire.Frame) {
+func (s *sendStream) frameAcked(f wire.Frame, oneWayDelay uint64) {
 	f.(*wire.StreamFrame).PutBack()
 
 	s.mutex.Lock()
@@ -379,7 +379,7 @@ func (s *sendStream) isNewlyCompleted() bool {
 	return false
 }
 
-func (s *sendStream) queueRetransmission(f wire.Frame) {
+func (s *sendStream) queueRetransmission(f wire.Frame, oneWayDelay uint64) {
 	sf := f.(*wire.StreamFrame)
 	sf.DataLenPresent = true
 	s.mutex.Lock()

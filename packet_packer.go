@@ -554,7 +554,7 @@ func (p *packetPacker) maybeGetAppDataPacket(maxPayloadSize protocol.ByteCount, 
 		if p.numNonAckElicitingAcks >= protocol.MaxNonAckElicitingAcks {
 			ping := &wire.PingFrame{}
 			// don't retransmit the PING frame when it is lost
-			payload.frames = append(payload.frames, ackhandler.Frame{Frame: ping, OnLost: func(wire.Frame) {}})
+			payload.frames = append(payload.frames, ackhandler.Frame{Frame: ping, OnLost: func(wire.Frame, uint64) {}})
 			payload.length += ping.Length(p.version)
 			p.numNonAckElicitingAcks = 0
 		} else {
@@ -600,11 +600,11 @@ func (p *packetPacker) composeNextPacket(maxFrameSize protocol.ByteCount, onlyAc
 			payload.frames = append(payload.frames, ackhandler.Frame{
 				Frame: datagram,
 				// set it to a no-op. Then we won't set the default callback, which would retransmit the frame.
-				OnLost: func(wire.Frame) {
-					datagram.Notifier(false)
+				OnLost: func(wire.Frame, uint64) {
+					datagram.Notifier(false, 0)
 				},
-				OnAcked: func(_ wire.Frame) {
-					datagram.Notifier(true)
+				OnAcked: func(_ wire.Frame, oneWayDelay uint64) {
+					datagram.Notifier(true, oneWayDelay)
 				},
 			})
 			payload.length += datagram.Length(p.version)

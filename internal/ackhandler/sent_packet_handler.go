@@ -92,6 +92,9 @@ type sentPacketHandler struct {
 
 	perspective protocol.Perspective
 
+	timeStampPhaseShift int64 // used to calculate the one way delay
+	creationTime        time.Time
+
 	tracer logging.ConnectionTracer
 	logger utils.Logger
 }
@@ -138,6 +141,7 @@ func newSentPacketHandler(
 		perspective:                    pers,
 		tracer:                         tracer,
 		logger:                         logger,
+		creationTime:                   time.Now(),
 	}
 }
 
@@ -293,12 +297,12 @@ func (h *sentPacketHandler) sentPacketImpl(packet *Packet) bool /* is ack-elicit
 	return isAckEliciting
 }
 
-func (h *sentPacketHandler) ReceivedAck(ack *wire.AckFrame, encLevel protocol.EncryptionLevel, rcvTime time.Time) (bool /* contained 1-RTT packet */, time.Time, error) {
+func (h *sentPacketHandler) ReceivedAck(ack *wire.AckFrame, encLevel protocol.EncryptionLevel, rcvTime time.Time) (bool /* contained 1-RTT packet */, error) {
 	pnSpace := h.getPacketNumberSpace(encLevel)
 
 	largestAcked := ack.LargestAcked()
 	if largestAcked > pnSpace.largestSent {
-		return false, time.Time{}, &qerr.TransportError{
+		return false, &qerr.TransportError{
 			ErrorCode:    qerr.ProtocolViolation,
 			ErrorMessage: "received ACK for an unsent packet",
 		}
@@ -316,9 +320,9 @@ func (h *sentPacketHandler) ReceivedAck(ack *wire.AckFrame, encLevel protocol.En
 	}
 
 	priorInFlight := h.bytesInFlight
-	ackedPackets, sentTimeLargestAck, err := h.detectAndRemoveAckedPackets(ack, encLevel)
+	ackedPackets, err := h.detectAndRemoveAckedPackets(ack, encLevel)
 	if err != nil || len(ackedPackets) == 0 {
-		return false, time.Time{}, err
+		return false, err
 	}
 	// update the RTT, if the largest acked is newly acknowledged
 	if len(ackedPackets) > 0 {
@@ -336,7 +340,7 @@ func (h *sentPacketHandler) ReceivedAck(ack *wire.AckFrame, encLevel protocol.En
 		}
 	}
 	if err := h.detectLostPackets(rcvTime, encLevel); err != nil {
-		return false, time.Time{}, err
+		return false, err
 	}
 	var acked1RTTPacket bool
 	for _, p := range ackedPackets {
@@ -368,7 +372,7 @@ func (h *sentPacketHandler) ReceivedAck(ack *wire.AckFrame, encLevel protocol.En
 
 	pnSpace.history.DeleteOldPackets(rcvTime)
 	h.setLossDetectionTimer()
-	return acked1RTTPacket, sentTimeLargestAck, nil
+	return acked1RTTPacket, nil
 }
 
 func (h *sentPacketHandler) GetLowestPacketNotConfirmedAcked() protocol.PacketNumber {
@@ -376,7 +380,7 @@ func (h *sentPacketHandler) GetLowestPacketNotConfirmedAcked() protocol.PacketNu
 }
 
 // Packets are returned in ascending packet number order.
-func (h *sentPacketHandler) detectAndRemoveAckedPackets(ack *wire.AckFrame, encLevel protocol.EncryptionLevel) ([]*Packet, time.Time, error) {
+func (h *sentPacketHandler) detectAndRemoveAckedPackets(ack *wire.AckFrame, encLevel protocol.EncryptionLevel) ([]*Packet, error) {
 	pnSpace := h.getPacketNumberSpace(encLevel)
 	h.ackedPackets = h.ackedPackets[:0]
 	ackRangeIndex := 0
@@ -433,6 +437,18 @@ func (h *sentPacketHandler) detectAndRemoveAckedPackets(ack *wire.AckFrame, encL
 		h.logger.Debugf("\tnewly acked packets (%d): %d", len(pns), pns)
 	}
 
+	lastOWD := uint64(0)
+
+	// calculate current one way delay
+	if encLevel == protocol.Encryption1RTT {
+		lastOWD = h.calcOneWayDelay(ack, largestAckTS)
+
+		// inform app of owd
+		if h.tracer != nil {
+			h.tracer.NewOneWayDelay(lastOWD)
+		}
+	}
+
 	for _, p := range h.ackedPackets {
 		if p.LargestAcked != protocol.InvalidPacketNumber && encLevel == protocol.Encryption1RTT {
 			h.lowestNotConfirmedAcked = utils.Max(h.lowestNotConfirmedAcked, p.LargestAcked+1)
@@ -440,18 +456,65 @@ func (h *sentPacketHandler) detectAndRemoveAckedPackets(ack *wire.AckFrame, encL
 
 		for _, f := range p.Frames {
 			if f.OnAcked != nil {
-				f.OnAcked(f.Frame)
+				f.OnAcked(f.Frame, lastOWD) // here we inform scream
 			}
 		}
 		if err := pnSpace.history.Remove(p.PacketNumber); err != nil {
-			return nil, time.Time{}, err
+			return nil, err
 		}
 		if h.tracer != nil {
 			h.tracer.AcknowledgedPacket(encLevel, p.PacketNumber)
 		}
 	}
 
-	return h.ackedPackets, largestAckTS, err
+	return h.ackedPackets, err
+}
+
+// calcOneWayDelay calculates current one way delay.
+// Inspired by the one way delay calculation of https://github.com/private-octopus/picoquic
+func (h *sentPacketHandler) calcOneWayDelay(frame *wire.AckFrame, sentTimeLargestAck time.Time) uint64 {
+	// if no phaseShift known, estimate it with rtt/2
+	if h.timeStampPhaseShift == 0 {
+		h.timeStampPhaseShift = h.rttStats.LatestRTT().Microseconds() / 2
+	}
+
+	is_time_stamp_valid := true
+	currentTime := time.Now().UnixMicro()
+	sentTime := sentTimeLargestAck.UnixMicro()
+	startTime := h.creationTime.UnixMicro()
+	timeStamp := int64(frame.TimeStamp)
+	shiftedTimeStamp := timeStamp + startTime + h.timeStampPhaseShift
+
+	// check correctness
+	if shiftedTimeStamp < 0 || shiftedTimeStamp < sentTime {
+		min_phase := sentTime - timeStamp - startTime
+		shiftedTimeStamp = timeStamp + startTime + min_phase
+
+		if shiftedTimeStamp > 0 && shiftedTimeStamp <= currentTime {
+			/* looks plausible -- the computed stamp is earlier than now. */
+			h.timeStampPhaseShift = min_phase
+		} else {
+			is_time_stamp_valid = false
+		}
+	} else if shiftedTimeStamp > currentTime {
+		max_phase := currentTime - timeStamp - startTime
+		shiftedTimeStamp = timeStamp + startTime + max_phase
+
+		if shiftedTimeStamp > 0 && shiftedTimeStamp >= sentTime {
+			/* looks plausible -- the computed stamp is earlier than now. */
+			h.timeStampPhaseShift = max_phase
+		} else {
+			is_time_stamp_valid = false
+		}
+	}
+
+	lastOWD := shiftedTimeStamp - sentTime
+	// TODO: what if timestamp not vaild
+	if !is_time_stamp_valid {
+		println("invalid ts")
+	}
+
+	return uint64(lastOWD)
 }
 
 func (h *sentPacketHandler) getLossTimeAndSpace() (time.Time, protocol.EncryptionLevel) {
@@ -805,7 +868,7 @@ func (h *sentPacketHandler) queueFramesForRetransmission(p *Packet) {
 		panic("no frames")
 	}
 	for _, f := range p.Frames {
-		f.OnLost(f.Frame)
+		f.OnLost(f.Frame, 0)
 	}
 	p.Frames = nil
 }

@@ -213,9 +213,8 @@ type connection struct {
 	timer *utils.Timer
 	// keepAlivePingSent stores whether a keep alive PING is in flight.
 	// It is reset as soon as we receive a packet from the peer.
-	keepAlivePingSent   bool
-	keepAliveInterval   time.Duration
-	timeStampPhaseShift int64 // used to calculate the one way delay
+	keepAlivePingSent bool
+	keepAliveInterval time.Duration
 
 	datagramQueue *datagramQueue
 
@@ -1516,7 +1515,7 @@ func (s *connection) handleHandshakeDoneFrame() error {
 }
 
 func (s *connection) handleAckFrame(frame *wire.AckFrame, encLevel protocol.EncryptionLevel) error {
-	acked1RTTPacket, sentTimeLargestAck, err := s.sentPacketHandler.ReceivedAck(frame, encLevel, s.lastPacketReceivedTime)
+	acked1RTTPacket, err := s.sentPacketHandler.ReceivedAck(frame, encLevel, s.lastPacketReceivedTime)
 	if err != nil {
 		return err
 	}
@@ -1527,62 +1526,7 @@ func (s *connection) handleAckFrame(frame *wire.AckFrame, encLevel protocol.Encr
 		s.handleHandshakeConfirmed()
 	}
 
-	// calculate current one way delay
-	lastOWD := s.calcOneWayDelay(frame, sentTimeLargestAck)
-
-	// inform app of owd
-	if s.tracer != nil {
-		s.tracer.NewOneWayDelay(lastOWD)
-	}
-
 	return s.cryptoStreamHandler.SetLargest1RTTAcked(frame.LargestAcked())
-}
-
-// calcOneWayDelay calculates current one way delay.
-// Inspired by the one way delay calculation of https://github.com/private-octopus/picoquic
-func (s *connection) calcOneWayDelay(frame *wire.AckFrame, sentTimeLargestAck time.Time) uint64 {
-	// if no phaseShift known, estimate it with rtt/2
-	if s.timeStampPhaseShift == 0 {
-		s.timeStampPhaseShift = s.rttStats.LatestRTT().Microseconds() / 2
-	}
-
-	is_time_stamp_valid := true
-	currentTime := time.Now().UnixMicro()
-	sentTime := sentTimeLargestAck.UnixMicro()
-	startTime := s.creationTime.UnixMicro()
-	timeStamp := int64(frame.TimeStamp)
-	shiftedTimeStamp := int64(frame.TimeStamp) + startTime + s.timeStampPhaseShift
-
-	// check correctness
-	if shiftedTimeStamp < 0 || shiftedTimeStamp < sentTime {
-		min_phase := sentTime - timeStamp - startTime
-		shiftedTimeStamp = timeStamp + startTime + min_phase
-
-		if shiftedTimeStamp > 0 && shiftedTimeStamp <= currentTime {
-			/* looks plausible -- the computed stamp is earlier than now. */
-			s.timeStampPhaseShift = min_phase
-		} else {
-			is_time_stamp_valid = false
-		}
-	} else if shiftedTimeStamp > currentTime {
-		max_phase := currentTime - timeStamp - startTime
-		shiftedTimeStamp = timeStamp + startTime + max_phase
-
-		if shiftedTimeStamp > 0 && shiftedTimeStamp >= sentTime {
-			/* looks plausible -- the computed stamp is earlier than now. */
-			s.timeStampPhaseShift = max_phase
-		} else {
-			is_time_stamp_valid = false
-		}
-	}
-
-	lastOWD := shiftedTimeStamp - sentTime
-	// TODO: what if timestamp not vaild
-	if !is_time_stamp_valid {
-		println("invalid ts")
-	}
-
-	return uint64(lastOWD)
 }
 
 func (s *connection) handleDatagramFrame(f *wire.DatagramFrame) error {
@@ -1929,11 +1873,11 @@ func (s *connection) sendProbePacket(encLevel protocol.EncryptionLevel) error {
 		//nolint:exhaustive // Cannot send probe packets for 0-RTT.
 		switch encLevel {
 		case protocol.EncryptionInitial:
-			s.retransmissionQueue.AddInitial(&wire.PingFrame{})
+			s.retransmissionQueue.AddInitial(&wire.PingFrame{}, 0)
 		case protocol.EncryptionHandshake:
-			s.retransmissionQueue.AddHandshake(&wire.PingFrame{})
+			s.retransmissionQueue.AddHandshake(&wire.PingFrame{}, 0)
 		case protocol.Encryption1RTT:
-			s.retransmissionQueue.AddAppData(&wire.PingFrame{})
+			s.retransmissionQueue.AddAppData(&wire.PingFrame{}, 0)
 		default:
 			panic("unexpected encryption level")
 		}
@@ -2170,13 +2114,13 @@ func (s *connection) onStreamCompleted(id protocol.StreamID) {
 	}
 }
 
-func (s *connection) SendMessage(p []byte, ackLossCB func(bool)) error {
+func (s *connection) SendMessage(p []byte, ackLossCB func(bool, uint64)) error {
 	if !s.supportsDatagrams() {
 		return errors.New("datagram support disabled")
 	}
-	f := &wire.DatagramFrame{DataLenPresent: true, Notifier: func(received bool) {
+	f := &wire.DatagramFrame{DataLenPresent: true, Notifier: func(received bool, oneWayDelay uint64) {
 		if ackLossCB != nil {
-			ackLossCB(received)
+			ackLossCB(received, oneWayDelay)
 		}
 	}}
 	if protocol.ByteCount(len(p)) > f.MaxDataLen(s.peerParams.MaxDatagramFrameSize, s.version) {

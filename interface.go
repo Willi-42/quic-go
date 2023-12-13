@@ -181,7 +181,7 @@ type Connection interface {
 	ConnectionState() ConnectionState
 
 	// SendMessage sends a message as a datagram, as specified in RFC 9221.
-	SendMessage([]byte, func(bool)) error
+	SendMessage([]byte, func(bool, uint64)) error
 	// ReceiveMessage gets a message received in a datagram, as specified in RFC 9221.
 	ReceiveMessage() ([]byte, error)
 }

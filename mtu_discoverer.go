@@ -61,11 +61,11 @@ func (f *mtuFinder) GetPing() (ackhandler.Frame, protocol.ByteCount) {
 	f.probeInFlight = true
 	return ackhandler.Frame{
 		Frame: &wire.PingFrame{},
-		OnLost: func(wire.Frame) {
+		OnLost: func(wire.Frame, uint64) {
 			f.probeInFlight = false
 			f.max = size
 		},
-		OnAcked: func(wire.Frame) {
+		OnAcked: func(wire.Frame, uint64) {
 			f.probeInFlight = false
 			f.current = size
 			f.mtuIncreased(size)
