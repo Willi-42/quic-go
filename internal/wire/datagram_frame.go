@@ -13,7 +13,7 @@ type DatagramFrame struct {
 	DataLenPresent bool
 	Data           []byte
 
-	Notifier func(received bool, oneWayDelay uint64)
+	Notifier func(received bool, recvTS uint64)
 }
 
 func parseDatagramFrame(r *bytes.Reader, _ protocol.VersionNumber) (*DatagramFrame, error) {

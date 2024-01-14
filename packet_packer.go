@@ -603,8 +603,8 @@ func (p *packetPacker) composeNextPacket(maxFrameSize protocol.ByteCount, onlyAc
 				OnLost: func(wire.Frame, uint64) {
 					datagram.Notifier(false, 0)
 				},
-				OnAcked: func(_ wire.Frame, oneWayDelay uint64) {
-					datagram.Notifier(true, oneWayDelay)
+				OnAcked: func(_ wire.Frame, recvTS uint64) {
+					datagram.Notifier(true, recvTS)
 				},
 			})
 			payload.length += datagram.Length(p.version)

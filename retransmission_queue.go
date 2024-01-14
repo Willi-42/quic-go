@@ -23,7 +23,7 @@ func newRetransmissionQueue(ver protocol.VersionNumber) *retransmissionQueue {
 	return &retransmissionQueue{version: ver}
 }
 
-func (q *retransmissionQueue) AddInitial(f wire.Frame, oneWayDelay uint64) {
+func (q *retransmissionQueue) AddInitial(f wire.Frame, recvTS uint64) {
 	if cf, ok := f.(*wire.CryptoFrame); ok {
 		q.initialCryptoData = append(q.initialCryptoData, cf)
 		return
@@ -31,7 +31,7 @@ func (q *retransmissionQueue) AddInitial(f wire.Frame, oneWayDelay uint64) {
 	q.initial = append(q.initial, f)
 }
 
-func (q *retransmissionQueue) AddHandshake(f wire.Frame, oneWayDelay uint64) {
+func (q *retransmissionQueue) AddHandshake(f wire.Frame, recvTS uint64) {
 	if cf, ok := f.(*wire.CryptoFrame); ok {
 		q.handshakeCryptoData = append(q.handshakeCryptoData, cf)
 		return
@@ -51,7 +51,7 @@ func (q *retransmissionQueue) HasAppData() bool {
 	return len(q.appData) > 0
 }
 
-func (q *retransmissionQueue) AddAppData(f wire.Frame, oneWayDelay uint64) {
+func (q *retransmissionQueue) AddAppData(f wire.Frame, recvTS uint64) {
 	if _, ok := f.(*wire.StreamFrame); ok {
 		panic("STREAM frames are handled with their respective streams.")
 	}

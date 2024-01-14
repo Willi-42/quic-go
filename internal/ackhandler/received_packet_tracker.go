@@ -29,7 +29,7 @@ type receivedPacketTracker struct {
 	ackAlarm                                time.Time
 	lastAck                                 *wire.AckFrame
 	referenceTime                           uint64
-	lastDataPacketReceivedTime              time.Time // to calc timeStamp without ack-only packets
+	ReceivedTimes                           []uint64 // to calc timeStamp without ack-only packets
 
 	logger utils.Logger
 
@@ -66,7 +66,8 @@ func (h *receivedPacketTracker) ReceivedPacket(packetNumber protocol.PacketNumbe
 		h.hasNewAck = true
 	}
 	if shouldInstigateAck {
-		h.lastDataPacketReceivedTime = rcvTime // ack required = no ack-only packet
+		h.ReceivedTimes = append(h.ReceivedTimes, uint64(rcvTime.UnixMicro())) // ack required = no ack-only packet
+
 		h.maybeQueueAck(packetNumber, rcvTime, isMissing)
 	}
 	switch ecn {
@@ -182,12 +183,17 @@ func (h *receivedPacketTracker) GetAckFrame(onlyIfQueued bool) *wire.AckFrame {
 	ack.ECNCE = h.ecnce
 	ack.AckRanges = h.packetHistory.AppendAckRanges(ack.AckRanges)
 
-	timeStampLargestAck := uint64(h.lastDataPacketReceivedTime.UnixMicro())
+	for _, absoluteTs := range h.ReceivedTimes {
+		if absoluteTs < h.referenceTime {
+			break // TODO: better exclude calc in handshake packets
+		}
 
-	// TODO: better exclude calc in handshake packets
-	if timeStampLargestAck >= h.referenceTime {
-		ack.TimeStamp = timeStampLargestAck - h.referenceTime
+		relativeTs := absoluteTs - h.referenceTime
+		ack.TimeStamps = append(ack.TimeStamps, relativeTs)
 	}
+
+	// empty ts list
+	h.ReceivedTimes = []uint64{}
 
 	if h.lastAck != nil {
 		wire.PutAckFrame(h.lastAck)

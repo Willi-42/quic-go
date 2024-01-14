@@ -2118,9 +2118,9 @@ func (s *connection) SendMessage(p []byte, ackLossCB func(bool, uint64)) error {
 	if !s.supportsDatagrams() {
 		return errors.New("datagram support disabled")
 	}
-	f := &wire.DatagramFrame{DataLenPresent: true, Notifier: func(received bool, oneWayDelay uint64) {
+	f := &wire.DatagramFrame{DataLenPresent: true, Notifier: func(received bool, recvTS uint64) {
 		if ackLossCB != nil {
-			ackLossCB(received, oneWayDelay)
+			ackLossCB(received, recvTS)
 		}
 	}}
 	if protocol.ByteCount(len(p)) > f.MaxDataLen(s.peerParams.MaxDatagramFrameSize, s.version) {

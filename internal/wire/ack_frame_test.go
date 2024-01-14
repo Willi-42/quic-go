@@ -213,27 +213,52 @@ var _ = Describe("ACK Frame (for IETF QUIC)", func() {
 	Context("when writing", func() {
 		It("writes a simple frame", func() {
 			f := &AckFrame{
-				AckRanges: []AckRange{{Smallest: 100, Largest: 1337}},
-				TimeStamp: 123,
+				AckRanges:  []AckRange{{Smallest: 100, Largest: 1337}},
+				TimeStamps: []uint64{123, 72, 12},
 			}
 			b, err := f.Append(nil, protocol.Version1)
 			Expect(err).ToNot(HaveOccurred())
 			expected := []byte{0x2}
 			expected = append(expected, encodeVarInt(1337)...) // largest acked
 			expected = append(expected, 0)                     // delay
-			expected = append(expected, encodeVarInt(123)...)  // timestamp
+			expected = append(expected, encodeVarInt(3)...)    // LenTimestamps
+			expected = append(expected, encodeVarInt(123)...)  // Timestamp 1
+			expected = append(expected, encodeVarInt(72)...)   // Timestamp 2
+			expected = append(expected, encodeVarInt(12)...)   // Timestamp 3
 			expected = append(expected, encodeVarInt(0)...)    // num ranges
+			expected = append(expected, encodeVarInt(1337-100)...)
+			Expect(b).To(Equal(expected))
+		})
+
+		It("writes a simple frame 2", func() {
+			f := &AckFrame{
+				AckRanges:  []AckRange{{Smallest: 100, Largest: 1337}},
+				TimeStamps: []uint64{0, 1, 12341234, 3, 7, 12},
+			}
+			b, err := f.Append(nil, protocol.Version1)
+			Expect(err).ToNot(HaveOccurred())
+			expected := []byte{0x2}
+			expected = append(expected, encodeVarInt(1337)...)     // largest acked
+			expected = append(expected, 0)                         // delay
+			expected = append(expected, encodeVarInt(6)...)        // len Timestamps
+			expected = append(expected, encodeVarInt(0)...)        // Timestamp 1
+			expected = append(expected, encodeVarInt(1)...)        // Timestamp 2
+			expected = append(expected, encodeVarInt(12341234)...) // Timestamp 3
+			expected = append(expected, encodeVarInt(3)...)        // Timestamp 4
+			expected = append(expected, encodeVarInt(7)...)        // Timestamp 5
+			expected = append(expected, encodeVarInt(12)...)       // Timestamp 6
+			expected = append(expected, encodeVarInt(0)...)        // num ranges
 			expected = append(expected, encodeVarInt(1337-100)...)
 			Expect(b).To(Equal(expected))
 		})
 
 		It("writes an ACK-ECN frame", func() {
 			f := &AckFrame{
-				AckRanges: []AckRange{{Smallest: 10, Largest: 2000}},
-				TimeStamp: 123456789,
-				ECT0:      13,
-				ECT1:      37,
-				ECNCE:     12345,
+				AckRanges:  []AckRange{{Smallest: 10, Largest: 2000}},
+				TimeStamps: []uint64{123456789},
+				ECT0:       13,
+				ECT1:       37,
+				ECNCE:      12345,
 			}
 			b, err := f.Append(nil, protocol.Version1)
 			Expect(err).ToNot(HaveOccurred())
@@ -241,7 +266,8 @@ var _ = Describe("ACK Frame (for IETF QUIC)", func() {
 			expected := []byte{0x3}
 			expected = append(expected, encodeVarInt(2000)...)      // largest acked
 			expected = append(expected, 0)                          // delay
-			expected = append(expected, encodeVarInt(123456789)...) // timestamp
+			expected = append(expected, encodeVarInt(1)...)         // len timestamps
+			expected = append(expected, encodeVarInt(123456789)...) // timestamp 1
 			expected = append(expected, encodeVarInt(0)...)         // num ranges
 			expected = append(expected, encodeVarInt(2000-10)...)
 			expected = append(expected, encodeVarInt(13)...)

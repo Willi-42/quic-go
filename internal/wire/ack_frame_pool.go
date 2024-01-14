@@ -13,6 +13,7 @@ func GetAckFrame() *AckFrame {
 	f.ECT0 = 0
 	f.ECT1 = 0
 	f.DelayTime = 0
+	f.TimeStamps = []uint64{}
 	return f
 }
 

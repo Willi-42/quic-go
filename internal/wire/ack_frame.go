@@ -15,9 +15,9 @@ var errInvalidAckRanges = errors.New("AckFrame: ACK frame contains invalid ACK r
 
 // An AckFrame is an ACK frame
 type AckFrame struct {
-	AckRanges []AckRange // has to be ordered. The highest ACK range goes first, the lowest ACK range goes last
-	DelayTime time.Duration
-	TimeStamp uint64
+	AckRanges  []AckRange // has to be ordered. The highest ACK range goes first, the lowest ACK range goes last
+	DelayTime  time.Duration
+	TimeStamps []uint64
 
 	ECT0, ECT1, ECNCE uint64
 }
@@ -49,11 +49,19 @@ func parseAckFrame(r *bytes.Reader, ackDelayExponent uint8, _ protocol.VersionNu
 	}
 	frame.DelayTime = delayTime
 
-	timeStamp, err := quicvarint.Read(r)
+	timeStampCount, err := quicvarint.Read(r)
 	if err != nil {
 		return nil, err
 	}
-	frame.TimeStamp = timeStamp
+
+	// frame.TimeStamps = []uint64{}
+	for i := 0; i < int(timeStampCount); i++ {
+		timeStamp, err := quicvarint.Read(r)
+		if err != nil {
+			return nil, err
+		}
+		frame.TimeStamps = append(frame.TimeStamps, timeStamp)
+	}
 
 	numBlocks, err := quicvarint.Read(r)
 	if err != nil {
@@ -123,7 +131,13 @@ func (f *AckFrame) Append(b []byte, _ protocol.VersionNumber) ([]byte, error) {
 	}
 	b = quicvarint.Append(b, uint64(f.LargestAcked()))
 	b = quicvarint.Append(b, encodeAckDelay(f.DelayTime))
-	b = quicvarint.Append(b, uint64(f.TimeStamp))
+
+	timeStampLen := len(f.TimeStamps)
+	b = quicvarint.Append(b, uint64(timeStampLen))
+
+	for _, ts := range f.TimeStamps {
+		b = quicvarint.Append(b, ts)
+	}
 
 	numRanges := f.numEncodableAckRanges()
 	b = quicvarint.Append(b, uint64(numRanges-1))
@@ -154,7 +168,11 @@ func (f *AckFrame) Length(_ protocol.VersionNumber) protocol.ByteCount {
 
 	length := 1 + quicvarint.Len(uint64(largestAcked)) + quicvarint.Len(encodeAckDelay(f.DelayTime))
 
-	length += quicvarint.Len(f.TimeStamp)
+	length += quicvarint.Len(uint64(len(f.TimeStamps)))
+
+	for _, ts := range f.TimeStamps {
+		length += quicvarint.Len(ts)
+	}
 
 	length += quicvarint.Len(uint64(numRanges - 1))
 	lowestInFirstRange := f.AckRanges[0].Smallest
