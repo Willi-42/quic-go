@@ -435,7 +435,8 @@ func (h *sentPacketHandler) detectAndRemoveAckedPackets(ack *wire.AckFrame, encL
 		}
 
 		shiftedRecTs := uint64(0)
-		if encLevel == protocol.Encryption1RTT {
+
+		if encLevel == protocol.Encryption1RTT && i < len(ack.TimeStamps) {
 			relativeReciveTs := ack.TimeStamps[i]
 			shiftedRecTs = h.shiftTimestamp(ack, p.SendTime, relativeReciveTs)
 		}

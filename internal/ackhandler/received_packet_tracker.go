@@ -29,7 +29,7 @@ type receivedPacketTracker struct {
 	ackAlarm                                time.Time
 	lastAck                                 *wire.AckFrame
 	referenceTime                           uint64
-	ReceivedTimes                           []uint64 // to calc timeStamp without ack-only packets
+	ReceivedTimes                           map[protocol.PacketNumber]uint64 // to calc timeStamp without ack-only packets
 
 	logger utils.Logger
 
@@ -48,6 +48,7 @@ func newReceivedPacketTracker(
 		logger:        logger,
 		version:       version,
 		referenceTime: uint64(time.Now().UnixMicro()),
+		ReceivedTimes: make(map[protocol.PacketNumber]uint64),
 	}
 }
 
@@ -66,8 +67,7 @@ func (h *receivedPacketTracker) ReceivedPacket(packetNumber protocol.PacketNumbe
 		h.hasNewAck = true
 	}
 	if shouldInstigateAck {
-		h.ReceivedTimes = append(h.ReceivedTimes, uint64(rcvTime.UnixMicro())) // ack required = no ack-only packet
-
+		h.ReceivedTimes[packetNumber] = uint64(rcvTime.UnixMicro()) // ack required = no ack-only packet
 		h.maybeQueueAck(packetNumber, rcvTime, isMissing)
 	}
 	switch ecn {
@@ -183,17 +183,25 @@ func (h *receivedPacketTracker) GetAckFrame(onlyIfQueued bool) *wire.AckFrame {
 	ack.ECNCE = h.ecnce
 	ack.AckRanges = h.packetHistory.AppendAckRanges(ack.AckRanges)
 
-	for _, absoluteTs := range h.ReceivedTimes {
-		if absoluteTs < h.referenceTime {
-			break // TODO: better exclude calc in handshake packets
-		}
+	// add ts for all packets in ack range
+	for _, ackRange := range ack.AckRanges {
+		smallest := int64(ackRange.Smallest)
+		largest := int64(ackRange.Largest)
 
-		relativeTs := absoluteTs - h.referenceTime
-		ack.TimeStamps = append(ack.TimeStamps, relativeTs)
+		for i := smallest; i <= largest; i++ {
+			absoluteTs := h.ReceivedTimes[protocol.PacketNumber(i)]
+
+			if absoluteTs < h.referenceTime {
+				continue // TODO: better exclude calc in handshake packets
+			}
+
+			relativeTs := absoluteTs - h.referenceTime
+			ack.TimeStamps = append(ack.TimeStamps, relativeTs)
+		}
 	}
 
-	// empty ts list
-	h.ReceivedTimes = []uint64{}
+	// empty ts map
+	h.ReceivedTimes = make(map[protocol.PacketNumber]uint64)
 
 	if h.lastAck != nil {
 		wire.PutAckFrame(h.lastAck)
