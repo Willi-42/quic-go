@@ -442,7 +442,7 @@ func (h *sentPacketHandler) detectAndRemoveAckedPackets(ack *wire.AckFrame, encL
 		}
 
 		for _, f := range p.Frames {
-			if f.OnAcked != nil {
+			if f.OnAcked != nil && shiftedRecTs != 0 { // ts = 0 -> ack with ts was lost
 				f.OnAcked(f.Frame, shiftedRecTs) // here we inform scream
 			}
 		}
