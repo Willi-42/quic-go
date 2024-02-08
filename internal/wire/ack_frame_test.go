@@ -17,7 +17,7 @@ var _ = Describe("ACK Frame (for IETF QUIC)", func() {
 			data := []byte{0x2}
 			data = append(data, encodeVarInt(100)...) // largest acked
 			data = append(data, encodeVarInt(0)...)   // delay
-			data = append(data, encodeVarInt(0)...)   // timestamp
+			data = append(data, encodeVarInt(0)...)   // timestamp count
 			data = append(data, encodeVarInt(0)...)   // num blocks
 			data = append(data, encodeVarInt(10)...)  // first ack block
 			b := bytes.NewReader(data)
@@ -33,7 +33,7 @@ var _ = Describe("ACK Frame (for IETF QUIC)", func() {
 			data := []byte{0x2}
 			data = append(data, encodeVarInt(55)...) // largest acked
 			data = append(data, encodeVarInt(0)...)  // delay
-			data = append(data, encodeVarInt(0)...)  // timestamp
+			data = append(data, encodeVarInt(0)...)  // timestamp count
 			data = append(data, encodeVarInt(0)...)  // num blocks
 			data = append(data, encodeVarInt(0)...)  // first ack block
 			b := bytes.NewReader(data)
@@ -49,7 +49,7 @@ var _ = Describe("ACK Frame (for IETF QUIC)", func() {
 			data := []byte{0x2}
 			data = append(data, encodeVarInt(20)...) // largest acked
 			data = append(data, encodeVarInt(0)...)  // delay
-			data = append(data, encodeVarInt(0)...)  // timestamp
+			data = append(data, encodeVarInt(0)...)  // timestamp count
 			data = append(data, encodeVarInt(0)...)  // num blocks
 			data = append(data, encodeVarInt(20)...) // first ack block
 			b := bytes.NewReader(data)
@@ -65,7 +65,7 @@ var _ = Describe("ACK Frame (for IETF QUIC)", func() {
 			data := []byte{0x2}
 			data = append(data, encodeVarInt(20)...) // largest acked
 			data = append(data, encodeVarInt(0)...)  // delay
-			data = append(data, encodeVarInt(0)...)  // timestamp
+			data = append(data, encodeVarInt(0)...)  // timestamp count
 			data = append(data, encodeVarInt(0)...)  // num blocks
 			data = append(data, encodeVarInt(21)...) // first ack block
 			b := bytes.NewReader(data)
@@ -77,7 +77,7 @@ var _ = Describe("ACK Frame (for IETF QUIC)", func() {
 			data := []byte{0x2}
 			data = append(data, encodeVarInt(1000)...) // largest acked
 			data = append(data, encodeVarInt(0)...)    // delay
-			data = append(data, encodeVarInt(0)...)    // timestamp
+			data = append(data, encodeVarInt(0)...)    // timestamp count
 			data = append(data, encodeVarInt(1)...)    // num blocks
 			data = append(data, encodeVarInt(100)...)  // first ack block
 			data = append(data, encodeVarInt(98)...)   // gap
@@ -99,7 +99,7 @@ var _ = Describe("ACK Frame (for IETF QUIC)", func() {
 			data := []byte{0x2}
 			data = append(data, encodeVarInt(100)...) // largest acked
 			data = append(data, encodeVarInt(0)...)   // delay
-			data = append(data, encodeVarInt(0)...)   // timestamp
+			data = append(data, encodeVarInt(0)...)   // timestamp count
 			data = append(data, encodeVarInt(2)...)   // num blocks
 			data = append(data, encodeVarInt(0)...)   // first ack block
 			data = append(data, encodeVarInt(0)...)   // gap
@@ -140,7 +140,7 @@ var _ = Describe("ACK Frame (for IETF QUIC)", func() {
 			data := []byte{0x2}
 			data = append(data, encodeVarInt(100)...)              // largest acked
 			data = append(data, encodeVarInt(math.MaxUint64/5)...) // delay
-			data = append(data, encodeVarInt(0)...)                // timestamp
+			data = append(data, encodeVarInt(0)...)                // timestamp count
 			data = append(data, encodeVarInt(0)...)                // num blocks
 			data = append(data, encodeVarInt(0)...)                // first ack block
 			b := bytes.NewReader(data)
@@ -155,7 +155,7 @@ var _ = Describe("ACK Frame (for IETF QUIC)", func() {
 			data := []byte{0x2}
 			data = append(data, encodeVarInt(1000)...) // largest acked
 			data = append(data, encodeVarInt(0)...)    // delay
-			data = append(data, encodeVarInt(0)...)    // timestamp
+			data = append(data, encodeVarInt(0)...)    // timestamp count
 			data = append(data, encodeVarInt(1)...)    // num blocks
 			data = append(data, encodeVarInt(100)...)  // first ack block
 			data = append(data, encodeVarInt(98)...)   // gap
@@ -173,7 +173,7 @@ var _ = Describe("ACK Frame (for IETF QUIC)", func() {
 				data := []byte{0x3}
 				data = append(data, encodeVarInt(100)...)        // largest acked
 				data = append(data, encodeVarInt(0)...)          // delay
-				data = append(data, encodeVarInt(0)...)          // timestamp
+				data = append(data, encodeVarInt(0)...)          // timestamp count
 				data = append(data, encodeVarInt(0)...)          // num blocks
 				data = append(data, encodeVarInt(10)...)         // first ack block
 				data = append(data, encodeVarInt(0x42)...)       // ECT(0)
@@ -192,7 +192,7 @@ var _ = Describe("ACK Frame (for IETF QUIC)", func() {
 				data := []byte{0x3}
 				data = append(data, encodeVarInt(1000)...)       // largest acked
 				data = append(data, encodeVarInt(0)...)          // delay
-				data = append(data, encodeVarInt(0)...)          // timestamp
+				data = append(data, encodeVarInt(0)...)          // timestamp count
 				data = append(data, encodeVarInt(1)...)          // num blocks
 				data = append(data, encodeVarInt(100)...)        // first ack block
 				data = append(data, encodeVarInt(98)...)         // gap
@@ -214,6 +214,7 @@ var _ = Describe("ACK Frame (for IETF QUIC)", func() {
 		It("writes a simple frame", func() {
 			f := &AckFrame{
 				AckRanges:  []AckRange{{Smallest: 100, Largest: 1337}},
+				PnForTs:    []uint64{42, 43, 44},
 				TimeStamps: []uint64{123, 72, 12},
 			}
 			b, err := f.Append(nil, protocol.Version1)
@@ -222,18 +223,29 @@ var _ = Describe("ACK Frame (for IETF QUIC)", func() {
 			expected = append(expected, encodeVarInt(1337)...) // largest acked
 			expected = append(expected, 0)                     // delay
 			expected = append(expected, encodeVarInt(3)...)    // LenTimestamps
+			expected = append(expected, encodeVarInt(42)...)   // pn for Timestamp 1
 			expected = append(expected, encodeVarInt(123)...)  // Timestamp 1
+			expected = append(expected, encodeVarInt(43)...)   // pn for Timestamp 2
 			expected = append(expected, encodeVarInt(72)...)   // Timestamp 2
+			expected = append(expected, encodeVarInt(44)...)   // pn for Timestamp 3
 			expected = append(expected, encodeVarInt(12)...)   // Timestamp 3
 			expected = append(expected, encodeVarInt(0)...)    // num ranges
 			expected = append(expected, encodeVarInt(1337-100)...)
 			Expect(b).To(Equal(expected))
+
+			r := bytes.NewReader(b)
+			frame, err := parseAckFrame(r, protocol.AckDelayExponent, protocol.Version1)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(frame.TimeStampMapping[42]).To(Equal(uint64(123)))
+			Expect(frame.TimeStampMapping[43]).To(Equal(uint64(72)))
+			Expect(frame.TimeStampMapping[44]).To(Equal(uint64(12)))
 		})
 
 		It("writes a simple frame 2", func() {
 			f := &AckFrame{
 				AckRanges:  []AckRange{{Smallest: 100, Largest: 1337}},
 				TimeStamps: []uint64{0, 1, 12341234, 3, 7, 12},
+				PnForTs:    []uint64{90, 91, 92, 1001, 1002, 1003},
 			}
 			b, err := f.Append(nil, protocol.Version1)
 			Expect(err).ToNot(HaveOccurred())
@@ -241,21 +253,38 @@ var _ = Describe("ACK Frame (for IETF QUIC)", func() {
 			expected = append(expected, encodeVarInt(1337)...)     // largest acked
 			expected = append(expected, 0)                         // delay
 			expected = append(expected, encodeVarInt(6)...)        // len Timestamps
+			expected = append(expected, encodeVarInt(90)...)       // pn for Timestamp 1
 			expected = append(expected, encodeVarInt(0)...)        // Timestamp 1
+			expected = append(expected, encodeVarInt(91)...)       // pn for Timestamp 2
 			expected = append(expected, encodeVarInt(1)...)        // Timestamp 2
+			expected = append(expected, encodeVarInt(92)...)       // pn for Timestamp 3
 			expected = append(expected, encodeVarInt(12341234)...) // Timestamp 3
+			expected = append(expected, encodeVarInt(1001)...)     // pn for Timestamp 4
 			expected = append(expected, encodeVarInt(3)...)        // Timestamp 4
+			expected = append(expected, encodeVarInt(1002)...)     // pn for Timestamp 5
 			expected = append(expected, encodeVarInt(7)...)        // Timestamp 5
+			expected = append(expected, encodeVarInt(1003)...)     // pn for Timestamp 6
 			expected = append(expected, encodeVarInt(12)...)       // Timestamp 6
 			expected = append(expected, encodeVarInt(0)...)        // num ranges
 			expected = append(expected, encodeVarInt(1337-100)...)
 			Expect(b).To(Equal(expected))
+
+			r := bytes.NewReader(b)
+			frame, err := parseAckFrame(r, protocol.AckDelayExponent, protocol.Version1)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(frame.TimeStampMapping[90]).To(Equal(uint64(0)))
+			Expect(frame.TimeStampMapping[91]).To(Equal(uint64(1)))
+			Expect(frame.TimeStampMapping[92]).To(Equal(uint64(12341234)))
+			Expect(frame.TimeStampMapping[1001]).To(Equal(uint64(3)))
+			Expect(frame.TimeStampMapping[1002]).To(Equal(uint64(7)))
+			Expect(frame.TimeStampMapping[1003]).To(Equal(uint64(12)))
 		})
 
 		It("writes an ACK-ECN frame", func() {
 			f := &AckFrame{
 				AckRanges:  []AckRange{{Smallest: 10, Largest: 2000}},
 				TimeStamps: []uint64{123456789},
+				PnForTs:    []uint64{93902},
 				ECT0:       13,
 				ECT1:       37,
 				ECNCE:      12345,
@@ -267,6 +296,7 @@ var _ = Describe("ACK Frame (for IETF QUIC)", func() {
 			expected = append(expected, encodeVarInt(2000)...)      // largest acked
 			expected = append(expected, 0)                          // delay
 			expected = append(expected, encodeVarInt(1)...)         // len timestamps
+			expected = append(expected, encodeVarInt(93902)...)     // pn for timestamp 1
 			expected = append(expected, encodeVarInt(123456789)...) // timestamp 1
 			expected = append(expected, encodeVarInt(0)...)         // num ranges
 			expected = append(expected, encodeVarInt(2000-10)...)
@@ -278,8 +308,11 @@ var _ = Describe("ACK Frame (for IETF QUIC)", func() {
 
 		It("writes a frame that acks a single packet", func() {
 			f := &AckFrame{
-				AckRanges: []AckRange{{Smallest: 0x2eadbeef, Largest: 0x2eadbeef}},
-				DelayTime: 18 * time.Millisecond,
+				AckRanges:        []AckRange{{Smallest: 0x2eadbeef, Largest: 0x2eadbeef}},
+				DelayTime:        18 * time.Millisecond,
+				TimeStamps:       []uint64{1234},
+				PnForTs:          []uint64{42},
+				TimeStampMapping: map[uint64]uint64{},
 			}
 			b, err := f.Append(nil, protocol.Version1)
 			Expect(err).ToNot(HaveOccurred())
@@ -287,6 +320,8 @@ var _ = Describe("ACK Frame (for IETF QUIC)", func() {
 			r := bytes.NewReader(b)
 			frame, err := parseAckFrame(r, protocol.AckDelayExponent, protocol.Version1)
 			Expect(err).ToNot(HaveOccurred())
+
+			f.TimeStampMapping[42] = 1234
 			Expect(frame).To(Equal(f))
 			Expect(frame.HasMissingRanges()).To(BeFalse())
 			Expect(frame.DelayTime).To(Equal(f.DelayTime))
@@ -295,7 +330,10 @@ var _ = Describe("ACK Frame (for IETF QUIC)", func() {
 
 		It("writes a frame that acks many packets", func() {
 			f := &AckFrame{
-				AckRanges: []AckRange{{Smallest: 0x1337, Largest: 0x2eadbeef}},
+				AckRanges:        []AckRange{{Smallest: 0x1337, Largest: 0x2eadbeef}},
+				TimeStamps:       []uint64{},
+				PnForTs:          []uint64{},
+				TimeStampMapping: map[uint64]uint64{},
 			}
 			b, err := f.Append(nil, protocol.Version1)
 			Expect(err).ToNot(HaveOccurred())
@@ -314,6 +352,9 @@ var _ = Describe("ACK Frame (for IETF QUIC)", func() {
 					{Smallest: 400, Largest: 1000},
 					{Smallest: 100, Largest: 200},
 				},
+				TimeStamps:       []uint64{},
+				PnForTs:          []uint64{},
+				TimeStampMapping: map[uint64]uint64{},
 			}
 			Expect(f.validateAckRanges()).To(BeTrue())
 			b, err := f.Append(nil, protocol.Version1)
@@ -335,6 +376,9 @@ var _ = Describe("ACK Frame (for IETF QUIC)", func() {
 					{Smallest: 5, Largest: 6},
 					{Smallest: 1, Largest: 3},
 				},
+				TimeStamps:       []uint64{},
+				PnForTs:          []uint64{},
+				TimeStampMapping: map[uint64]uint64{},
 			}
 			Expect(f.validateAckRanges()).To(BeTrue())
 			b, err := f.Append(nil, protocol.Version1)

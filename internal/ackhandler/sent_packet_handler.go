@@ -429,20 +429,22 @@ func (h *sentPacketHandler) detectAndRemoveAckedPackets(ack *wire.AckFrame, encL
 		h.logger.Debugf("\tnewly acked packets (%d): %d", len(pns), pns)
 	}
 
-	for i, p := range h.ackedPackets {
+	for _, p := range h.ackedPackets {
 		if p.LargestAcked != protocol.InvalidPacketNumber && encLevel == protocol.Encryption1RTT {
 			h.lowestNotConfirmedAcked = utils.Max(h.lowestNotConfirmedAcked, p.LargestAcked+1)
 		}
 
 		shiftedRecTs := uint64(0)
+		gotTs := false
 
-		if encLevel == protocol.Encryption1RTT && i < len(ack.TimeStamps) {
-			relativeReciveTs := ack.TimeStamps[i]
+		if encLevel == protocol.Encryption1RTT {
+			var relativeReciveTs uint64
+			relativeReciveTs, gotTs = ack.TimeStampMapping[uint64(p.PacketNumber)]
 			shiftedRecTs = h.shiftTimestamp(ack, p.SendTime, relativeReciveTs)
 		}
 
 		for _, f := range p.Frames {
-			if f.OnAcked != nil && shiftedRecTs != 0 { // ts = 0 -> ack with ts was lost
+			if f.OnAcked != nil && gotTs {
 				f.OnAcked(f.Frame, shiftedRecTs) // here we inform scream
 			}
 		}

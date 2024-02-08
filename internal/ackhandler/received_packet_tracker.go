@@ -188,20 +188,25 @@ func (h *receivedPacketTracker) GetAckFrame(onlyIfQueued bool) *wire.AckFrame {
 		smallest := int64(ackRange.Smallest)
 		largest := int64(ackRange.Largest)
 
-		for i := smallest; i <= largest; i++ {
-			absoluteTs := h.ReceivedTimes[protocol.PacketNumber(i)]
+		for pn := smallest; pn <= largest; pn++ {
+			absoluteTs, ok := h.ReceivedTimes[protocol.PacketNumber(pn)]
+			if !ok {
+				continue
+			}
 
 			if absoluteTs < h.referenceTime {
 				continue // TODO: better exclude calc in handshake packets
 			}
 
 			relativeTs := absoluteTs - h.referenceTime
+
+			ack.PnForTs = append(ack.PnForTs, uint64(pn))
 			ack.TimeStamps = append(ack.TimeStamps, relativeTs)
 		}
 	}
 
 	// empty ts map
-	h.ReceivedTimes = make(map[protocol.PacketNumber]uint64)
+	h.ReceivedTimes = map[protocol.PacketNumber]uint64{}
 
 	if h.lastAck != nil {
 		wire.PutAckFrame(h.lastAck)

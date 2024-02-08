@@ -8,12 +8,7 @@ var ackFramePool = sync.Pool{New: func() any {
 
 func GetAckFrame() *AckFrame {
 	f := ackFramePool.Get().(*AckFrame)
-	f.AckRanges = f.AckRanges[:0]
-	f.ECNCE = 0
-	f.ECT0 = 0
-	f.ECT1 = 0
-	f.DelayTime = 0
-	f.TimeStamps = []uint64{}
+	f.Reset()
 	return f
 }
 

@@ -15,11 +15,24 @@ var errInvalidAckRanges = errors.New("AckFrame: ACK frame contains invalid ACK r
 
 // An AckFrame is an ACK frame
 type AckFrame struct {
-	AckRanges  []AckRange // has to be ordered. The highest ACK range goes first, the lowest ACK range goes last
-	DelayTime  time.Duration
-	TimeStamps []uint64
+	AckRanges        []AckRange // has to be ordered. The highest ACK range goes first, the lowest ACK range goes last
+	DelayTime        time.Duration
+	PnForTs          []uint64
+	TimeStamps       []uint64
+	TimeStampMapping map[uint64]uint64 // only used for parsing
 
 	ECT0, ECT1, ECNCE uint64
+}
+
+func (f *AckFrame) Reset() {
+	f.AckRanges = f.AckRanges[:0]
+	f.ECNCE = 0
+	f.ECT0 = 0
+	f.ECT1 = 0
+	f.DelayTime = 0
+	f.TimeStamps = []uint64{}
+	f.PnForTs = []uint64{}
+	f.TimeStampMapping = map[uint64]uint64{}
 }
 
 // parseAckFrame reads an ACK frame
@@ -54,13 +67,19 @@ func parseAckFrame(r *bytes.Reader, ackDelayExponent uint8, _ protocol.VersionNu
 		return nil, err
 	}
 
-	// frame.TimeStamps = []uint64{}
+	// timestamps
 	for i := 0; i < int(timeStampCount); i++ {
-		timeStamp, err := quicvarint.Read(r)
+		pnTs, err := quicvarint.Read(r)
 		if err != nil {
 			return nil, err
 		}
-		frame.TimeStamps = append(frame.TimeStamps, timeStamp)
+		ts, err := quicvarint.Read(r)
+		if err != nil {
+			return nil, err
+		}
+
+		frame.PnForTs = append(frame.PnForTs, pnTs)
+		frame.TimeStamps = append(frame.TimeStamps, ts)
 	}
 
 	numBlocks, err := quicvarint.Read(r)
@@ -118,6 +137,11 @@ func parseAckFrame(r *bytes.Reader, ackDelayExponent uint8, _ protocol.VersionNu
 		}
 	}
 
+	// store timestamp mapping
+	for i, pnTs := range frame.PnForTs {
+		ts := frame.TimeStamps[i]
+		frame.TimeStampMapping[pnTs] = ts
+	}
 	return frame, nil
 }
 
@@ -132,10 +156,12 @@ func (f *AckFrame) Append(b []byte, _ protocol.VersionNumber) ([]byte, error) {
 	b = quicvarint.Append(b, uint64(f.LargestAcked()))
 	b = quicvarint.Append(b, encodeAckDelay(f.DelayTime))
 
-	timeStampLen := len(f.TimeStamps)
+	timeStampLen := len(f.PnForTs)
 	b = quicvarint.Append(b, uint64(timeStampLen))
 
-	for _, ts := range f.TimeStamps {
+	for i, pnTs := range f.PnForTs {
+		ts := f.TimeStamps[i]
+		b = quicvarint.Append(b, pnTs)
 		b = quicvarint.Append(b, ts)
 	}
 
@@ -170,7 +196,10 @@ func (f *AckFrame) Length(_ protocol.VersionNumber) protocol.ByteCount {
 
 	length += quicvarint.Len(uint64(len(f.TimeStamps)))
 
-	for _, ts := range f.TimeStamps {
+	for i, pnTs := range f.PnForTs { // highest ack range first
+		ts := f.TimeStamps[i]
+
+		length += quicvarint.Len(pnTs)
 		length += quicvarint.Len(ts)
 	}
 
