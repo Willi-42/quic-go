@@ -34,6 +34,7 @@ const (
 	connectionCloseFrameType    = 0x1c
 	applicationCloseFrameType   = 0x1d
 	handshakeDoneFrameType      = 0x1e
+	timestampFrameType          = 0x1f // TODO: what number
 )
 
 // The FrameParser parses QUIC frames, one by one.
@@ -143,6 +144,8 @@ func (p *FrameParser) parseFrame(r *bytes.Reader, typ uint64, encLevel protocol.
 			frame, err = parseConnectionCloseFrame(r, typ, v)
 		case handshakeDoneFrameType:
 			frame = &HandshakeDoneFrame{}
+		case timestampFrameType:
+			frame, err = parseTimestampFrame(r, v)
 		case 0x30, 0x31:
 			if p.supportsDatagrams {
 				frame, err = parseDatagramFrame(r, typ, v)

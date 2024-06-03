@@ -2,7 +2,9 @@ package quic
 
 import (
 	"errors"
+	"fmt"
 	"sync"
+	"time"
 
 	"github.com/quic-go/quic-go/internal/ackhandler"
 	"github.com/quic-go/quic-go/internal/protocol"
@@ -118,6 +120,18 @@ func (f *framerI) AppendControlFrames(frames []ackhandler.Frame, maxLen protocol
 		length += frameLen
 		f.controlFrames = f.controlFrames[:len(f.controlFrames)-1]
 	}
+
+	// add timestamp
+	tsframe := wire.TimestampFrame{Timestamp: uint64(time.Now().UnixMicro())}
+	frameLen := tsframe.Length(v)
+	if length+frameLen > maxLen {
+		// no space for TSFrame
+		fmt.Printf("No space for Ts frame")
+		return frames, length
+	}
+	frames = append(frames, ackhandler.Frame{Frame: &tsframe})
+	length += frameLen
+
 	return frames, length
 }
 

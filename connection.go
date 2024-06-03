@@ -1338,6 +1338,8 @@ func (s *connection) handleFrame(f wire.Frame, encLevel protocol.EncryptionLevel
 		err = s.handleHandshakeDoneFrame()
 	case *wire.DatagramFrame:
 		err = s.handleDatagramFrame(frame)
+	case *wire.TimestampFrame:
+		err = s.handleTimestampFrame(frame)
 	default:
 		err = fmt.Errorf("unexpected frame type: %s", reflect.ValueOf(&frame).Elem().Type().Name())
 	}
@@ -1538,6 +1540,18 @@ func (s *connection) handleDatagramFrame(f *wire.DatagramFrame) error {
 		}
 	}
 	s.datagramQueue.HandleDatagramFrame(f)
+	return nil
+}
+
+func (s *connection) handleTimestampFrame(f *wire.TimestampFrame) error {
+	sentTs := f.Timestamp
+	reciveTs := uint64(s.lastPacketReceivedTime.UnixMicro())
+
+	// inform app of new Ts
+	if s.tracer != nil && s.tracer.ReceivedSentTime != nil {
+		s.tracer.ReceivedSentTime(uint64(42), sentTs, reciveTs)
+	}
+
 	return nil
 }
 
