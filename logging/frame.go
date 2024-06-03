@@ -44,6 +44,8 @@ type (
 	StreamsBlockedFrame = wire.StreamsBlockedFrame
 	// A StreamDataBlockedFrame is a STREAM_DATA_BLOCKED frame.
 	StreamDataBlockedFrame = wire.StreamDataBlockedFrame
+	// A TimestampFrame is a TIMESTAMP frame.
+	TimestampFrame = wire.TimestampFrame
 )
 
 // A CryptoFrame is a CRYPTO frame.
