@@ -649,6 +649,8 @@ func (p *packetPacker) composeNextPacket(maxFrameSize protocol.ByteCount, onlyAc
 			case *wire.PathChallengeFrame, *wire.PathResponseFrame:
 				// Path probing is currently not supported, therefore we don't need to set the OnAcked callback yet.
 				// PATH_CHALLENGE and PATH_RESPONSE are never retransmitted.
+			case *wire.TimestampFrame:
+				// Timestamp Frames are not retransmitted.
 			default:
 				pl.frames[i].Handler = p.retransmissionQueue.AppDataAckHandler()
 			}
