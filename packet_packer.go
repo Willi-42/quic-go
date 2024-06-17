@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"time"
 
 	"golang.org/x/exp/rand"
 
@@ -602,13 +603,23 @@ func (p *packetPacker) composeNextPacket(maxFrameSize protocol.ByteCount, onlyAc
 		}
 	}
 
+	// timestamp frame
+	tsframe := wire.TimestampFrame{Timestamp: uint64(time.Now().UnixMicro())}
+	tsLen := tsframe.Length(v)
+	tsAdded := false
+
 	if p.datagramQueue != nil {
 		if f := p.datagramQueue.Peek(); f != nil {
 			size := f.Length(v)
-			if size <= maxFrameSize-pl.length { // DATAGRAM frame fits
+			if size <= maxFrameSize-pl.length-tsLen { // DATAGRAM frame fits
 				pl.frames = append(pl.frames, ackhandler.Frame{Frame: f})
 				pl.length += size
 				p.datagramQueue.Pop()
+
+				pl.frames = append(pl.frames, ackhandler.Frame{Frame: &tsframe})
+				pl.length += tsLen
+				tsAdded = true
+
 			} else if !hasAck {
 				// The DATAGRAM frame doesn't fit, and the packet doesn't contain an ACK.
 				// Discard this frame. There's no point in retrying this in the next packet,
@@ -643,6 +654,12 @@ func (p *packetPacker) composeNextPacket(maxFrameSize protocol.ByteCount, onlyAc
 		startLen := len(pl.frames)
 		pl.frames, lengthAdded = p.framer.AppendControlFrames(pl.frames, maxFrameSize-pl.length, v)
 		pl.length += lengthAdded
+
+		if !tsAdded && pl.length+tsLen <= maxFrameSize-pl.length {
+			pl.frames = append(pl.frames, ackhandler.Frame{Frame: &tsframe})
+			pl.length += tsLen
+		}
+
 		// add handlers for the control frames that were added
 		for i := startLen; i < len(pl.frames); i++ {
 			switch pl.frames[i].Frame.(type) {
