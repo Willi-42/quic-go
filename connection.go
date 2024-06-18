@@ -1208,7 +1208,7 @@ func (s *connection) handleUnpackedLongHeaderPacket(
 			s.tracer.ReceivedLongHeaderPacket(packet.hdr, packetSize, ecn, frames)
 		}
 	}
-	isAckEliciting, err := s.handleFrames(packet.data, packet.hdr.DestConnectionID, packet.encryptionLevel, log, protocol.PacketNumber(0)) // TODO: fix pn
+	isAckEliciting, err := s.handleFrames(packet.data, packet.hdr.DestConnectionID, packet.encryptionLevel, log)
 	if err != nil {
 		return err
 	}
@@ -1227,7 +1227,7 @@ func (s *connection) handleUnpackedShortHeaderPacket(
 	s.firstAckElicitingPacketAfterIdleSentTime = time.Time{}
 	s.keepAlivePingSent = false
 
-	isAckEliciting, err := s.handleFrames(data, destConnID, protocol.Encryption1RTT, log, pn)
+	isAckEliciting, err := s.handleFrames(data, destConnID, protocol.Encryption1RTT, log)
 	if err != nil {
 		return err
 	}
@@ -1239,7 +1239,6 @@ func (s *connection) handleFrames(
 	destConnID protocol.ConnectionID,
 	encLevel protocol.EncryptionLevel,
 	log func([]logging.Frame),
-	pn protocol.PacketNumber,
 ) (isAckEliciting bool, _ error) {
 	// Only used for tracing.
 	// If we're not tracing, this slice will always remain empty.
@@ -1269,7 +1268,7 @@ func (s *connection) handleFrames(
 		if handleErr != nil {
 			continue
 		}
-		if err := s.handleFrame(frame, encLevel, destConnID, pn); err != nil {
+		if err := s.handleFrame(frame, encLevel, destConnID); err != nil {
 			if log == nil {
 				return false, err
 			}
@@ -1298,12 +1297,7 @@ func (s *connection) handleFrames(
 	return
 }
 
-func (s *connection) handleFrame(
-	f wire.Frame,
-	encLevel protocol.EncryptionLevel,
-	destConnID protocol.ConnectionID,
-	pn protocol.PacketNumber,
-) error {
+func (s *connection) handleFrame(f wire.Frame, encLevel protocol.EncryptionLevel, destConnID protocol.ConnectionID) error {
 	var err error
 	wire.LogFrame(s.logger, f, false)
 	switch frame := f.(type) {
@@ -1345,7 +1339,7 @@ func (s *connection) handleFrame(
 	case *wire.DatagramFrame:
 		err = s.handleDatagramFrame(frame)
 	case *wire.TimestampFrame:
-		err = s.handleTimestampFrame(frame, pn)
+		err = s.handleTimestampFrame(frame)
 	default:
 		err = fmt.Errorf("unexpected frame type: %s", reflect.ValueOf(&frame).Elem().Type().Name())
 	}
@@ -1549,14 +1543,9 @@ func (s *connection) handleDatagramFrame(f *wire.DatagramFrame) error {
 	return nil
 }
 
-func (s *connection) handleTimestampFrame(f *wire.TimestampFrame, pn protocol.PacketNumber) error {
-	sentTs := f.Timestamp
-	reciveTs := uint64(s.lastPacketReceivedTime.UnixMicro())
-
-	// inform app of new Ts
-	if s.tracer != nil && s.tracer.ReceivedSentTime != nil {
-		s.tracer.ReceivedSentTime(uint64(pn), sentTs, reciveTs)
-	}
+func (s *connection) handleTimestampFrame(_ *wire.TimestampFrame) error {
+	// app gets informed about timestamp in ReceivedShortHeaderPacket tracer
+	// nothing to do here
 
 	return nil
 }
