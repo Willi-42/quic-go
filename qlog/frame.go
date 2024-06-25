@@ -59,6 +59,8 @@ func (f frame) MarshalJSONObject(enc *gojay.Encoder) {
 		marshalHandshakeDoneFrame(enc, frame)
 	case *logging.DatagramFrame:
 		marshalDatagramFrame(enc, frame)
+	case *logging.TimestampFrame:
+		marshalTimestampFrame(enc, frame)
 	default:
 		panic("unknown frame type")
 	}
@@ -224,4 +226,9 @@ func marshalHandshakeDoneFrame(enc *gojay.Encoder, _ *logging.HandshakeDoneFrame
 func marshalDatagramFrame(enc *gojay.Encoder, f *logging.DatagramFrame) {
 	enc.StringKey("frame_type", "datagram")
 	enc.Int64Key("length", int64(f.Length))
+}
+
+func marshalTimestampFrame(enc *gojay.Encoder, f *logging.TimestampFrame) {
+	enc.StringKey("frame_type", "timestamp")
+	enc.Uint64Key("timestamp", f.Timestamp)
 }
