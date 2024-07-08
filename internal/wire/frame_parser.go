@@ -143,7 +143,7 @@ func (p *FrameParser) parseFrame(b []byte, typ uint64, encLevel protocol.Encrypt
 		case handshakeDoneFrameType:
 			frame = &HandshakeDoneFrame{}
 		case timestampFrameType:
-			frame, err = parseTimestampFrame(r, v)
+			frame, l, err = parseTimestampFrame(b, v)
 		case 0x30, 0x31:
 			if p.supportsDatagrams {
 				frame, l, err = parseDatagramFrame(b, typ, v)

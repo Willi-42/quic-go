@@ -1,8 +1,6 @@
 package wire
 
 import (
-	"bytes"
-
 	"github.com/quic-go/quic-go/internal/protocol"
 	"github.com/quic-go/quic-go/quicvarint"
 )
@@ -13,17 +11,17 @@ type TimestampFrame struct {
 }
 
 // parseTimestampFrame reads a timestamp frame
-func parseTimestampFrame(r *bytes.Reader, _ protocol.Version) (*TimestampFrame, error) {
+func parseTimestampFrame(b []byte, _ protocol.Version) (*TimestampFrame, int, error) {
 	frame := &TimestampFrame{}
 
 	// read the timestamp
-	ts, err := quicvarint.Read(r)
+	ts, l, err := quicvarint.Parse(b)
 	if err != nil {
-		return nil, err
+		return nil, l, err
 	}
 	frame.Timestamp = ts
 
-	return frame, nil
+	return frame, l, nil
 }
 
 // Append appends an timestamp frame.
