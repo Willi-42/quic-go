@@ -6,10 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	mockquic "github.com/quic-go/quic-go/internal/mocks/quic"
-	"github.com/quic-go/quic-go/internal/utils"
-
 	"github.com/quic-go/qpack"
+	mockquic "github.com/quic-go/quic-go/internal/mocks/quic"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -28,7 +26,7 @@ var _ = Describe("Response Writer", func() {
 		str.EXPECT().Write(gomock.Any()).DoAndReturn(strBuf.Write).AnyTimes()
 		str.EXPECT().SetReadDeadline(gomock.Any()).Return(nil).AnyTimes()
 		str.EXPECT().SetWriteDeadline(gomock.Any()).Return(nil).AnyTimes()
-		rw = newResponseWriter(str, nil, utils.DefaultLogger)
+		rw = newResponseWriter(newStream(str, nil, nil), nil, false, nil)
 	})
 
 	decodeHeader := func(str io.Reader) map[string][]string {
@@ -36,7 +34,8 @@ var _ = Describe("Response Writer", func() {
 		fields := make(map[string][]string)
 		decoder := qpack.NewDecoder(nil)
 
-		frame, err := parseNextFrame(str, nil)
+		fp := frameParser{r: str}
+		frame, err := fp.ParseNext()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(frame).To(BeAssignableToTypeOf(&headersFrame{}))
 		headersFrame := frame.(*headersFrame)
@@ -52,7 +51,8 @@ var _ = Describe("Response Writer", func() {
 	}
 
 	getData := func(str io.Reader) []byte {
-		frame, err := parseNextFrame(str, nil)
+		fp := frameParser{r: str}
+		frame, err := fp.ParseNext()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(frame).To(BeAssignableToTypeOf(&dataFrame{}))
 		df := frame.(*dataFrame)
@@ -139,9 +139,10 @@ var _ = Describe("Response Writer", func() {
 
 		// According to the spec, headers sent in the informational response must also be included in the final response
 		fields = decodeHeader(strBuf)
-		Expect(fields).To(HaveLen(3))
+		Expect(fields).To(HaveLen(4))
 		Expect(fields).To(HaveKeyWithValue(":status", []string{"200"}))
 		Expect(fields).To(HaveKey("date"))
+		Expect(fields).To(HaveKey("content-type"))
 		Expect(fields).To(HaveKeyWithValue("link", []string{"</style.css>; rel=preload; as=style", "</script.js>; rel=preload; as=script"}))
 
 		Expect(getData(strBuf)).To(Equal([]byte("foobar")))
