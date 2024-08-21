@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/quic-go/quic-go/internal/congestion"
 	"github.com/quic-go/quic-go/internal/protocol"
 	"github.com/quic-go/quic-go/quicvarint"
 )
@@ -124,5 +125,11 @@ func populateConfig(config *Config) *Config {
 		DisablePathMTUDiscovery:        config.DisablePathMTUDiscovery,
 		Allow0RTT:                      config.Allow0RTT,
 		Tracer:                         config.Tracer,
+		DisableCC:                      config.DisableCC,
 	}
+}
+
+func ccToInternalCC(ccType CCType) congestion.InternalccType {
+	toInt := int(ccType)
+	return congestion.InternalccType(toInt)
 }

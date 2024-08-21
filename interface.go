@@ -36,6 +36,14 @@ type ClientToken struct {
 	data []byte
 }
 
+type CCType int
+
+const (
+	DefaultCC CCType = iota
+	DisabledCC
+	PacerOnly
+)
+
 type TokenStore interface {
 	// Pop searches for a ClientToken associated with the given key.
 	// Since tokens are not supposed to be reused, it must remove the token from the cache.
@@ -343,6 +351,8 @@ type Config struct {
 	// Enable QUIC datagram support (RFC 9221).
 	EnableDatagrams bool
 	Tracer          func(context.Context, logging.Perspective, ConnectionID) *logging.ConnectionTracer
+	// Disables the internal congestion controller
+	DisableCC CCType
 }
 
 // ClientHelloInfo contains information about an incoming connection attempt.

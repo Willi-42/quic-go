@@ -6,6 +6,14 @@ import (
 	"github.com/quic-go/quic-go/internal/protocol"
 )
 
+type InternalccType int
+
+const (
+	DefaultCC InternalccType = iota
+	DisabledCC
+	PacerOnly
+)
+
 // A SendAlgorithm performs congestion control
 type SendAlgorithm interface {
 	TimeUntilSend(bytesInFlight protocol.ByteCount) time.Time
