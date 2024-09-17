@@ -126,6 +126,7 @@ func populateConfig(config *Config) *Config {
 		Allow0RTT:                      config.Allow0RTT,
 		Tracer:                         config.Tracer,
 		DisableCC:                      config.DisableCC,
+		DisablePnSkips:                 config.DisablePnSkips,
 	}
 }
 

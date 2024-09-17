@@ -118,6 +118,7 @@ func newSentPacketHandler(
 	tracer *logging.ConnectionTracer,
 	logger utils.Logger,
 	disableCC congestion.InternalccType,
+	disablePnSkips bool,
 ) *sentPacketHandler {
 
 	var cc congestion.SendAlgorithmWithDebugInfos
@@ -142,7 +143,7 @@ func newSentPacketHandler(
 		peerAddressValidated:           pers == protocol.PerspectiveClient || clientAddressValidated,
 		initialPackets:                 newPacketNumberSpace(initialPN, false),
 		handshakePackets:               newPacketNumberSpace(0, false),
-		appDataPackets:                 newPacketNumberSpace(0, true),
+		appDataPackets:                 newPacketNumberSpace(0, !disablePnSkips),
 		rttStats:                       rttStats,
 		congestion:                     cc,
 		perspective:                    pers,

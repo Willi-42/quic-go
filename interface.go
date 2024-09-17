@@ -352,7 +352,8 @@ type Config struct {
 	EnableDatagrams bool
 	Tracer          func(context.Context, logging.Perspective, ConnectionID) *logging.ConnectionTracer
 	// Disables the internal congestion controller
-	DisableCC CCType
+	DisableCC      CCType
+	DisablePnSkips bool
 }
 
 // ClientHelloInfo contains information about an incoming connection attempt.

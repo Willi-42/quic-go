@@ -20,7 +20,8 @@ func NewAckHandler(
 	tracer *logging.ConnectionTracer,
 	logger utils.Logger,
 	disableCC congestion.InternalccType,
+	disablePnSkips bool,
 ) (SentPacketHandler, ReceivedPacketHandler) {
-	sph := newSentPacketHandler(initialPacketNumber, initialMaxDatagramSize, rttStats, clientAddressValidated, enableECN, pers, tracer, logger, disableCC)
+	sph := newSentPacketHandler(initialPacketNumber, initialMaxDatagramSize, rttStats, clientAddressValidated, enableECN, pers, tracer, logger, disableCC, disablePnSkips)
 	return sph, newReceivedPacketHandler(sph, logger)
 }
