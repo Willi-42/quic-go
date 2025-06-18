@@ -583,9 +583,17 @@ func (p *packetPacker) maybeGetAppDataPacket(maxPayloadSize protocol.ByteCount, 
 }
 
 func (p *packetPacker) composeNextPacket(maxFrameSize protocol.ByteCount, onlyAck, ackAllowed bool, v protocol.Version) payload {
+	// timestamp frame
+	tsframe := wire.TimestampFrame{Timestamp: uint64(time.Now().UnixMicro())}
+	tsLen := tsframe.Length(v)
+	tsAdded := false
+
 	if onlyAck {
 		if ack := p.acks.GetAckFrame(protocol.Encryption1RTT, true); ack != nil {
-			return payload{ack: ack, length: ack.Length(v)}
+			pl := payload{ack: ack, length: ack.Length(v)}
+			pl.frames = append(pl.frames, ackhandler.Frame{Frame: &tsframe})
+			pl.length += tsLen
+			return pl
 		}
 		return payload{}
 	}
@@ -602,11 +610,6 @@ func (p *packetPacker) composeNextPacket(maxFrameSize protocol.ByteCount, onlyAc
 			hasAck = true
 		}
 	}
-
-	// timestamp frame
-	tsframe := wire.TimestampFrame{Timestamp: uint64(time.Now().UnixMicro())}
-	tsLen := tsframe.Length(v)
-	tsAdded := false
 
 	if p.datagramQueue != nil {
 		if f := p.datagramQueue.Peek(); f != nil {
@@ -631,6 +634,10 @@ func (p *packetPacker) composeNextPacket(maxFrameSize protocol.ByteCount, onlyAc
 	}
 
 	if hasAck && !hasData && !hasRetransmission {
+		if !tsAdded {
+			pl.frames = append(pl.frames, ackhandler.Frame{Frame: &tsframe})
+			pl.length += tsLen
+		}
 		return pl
 	}
 
@@ -667,7 +674,7 @@ func (p *packetPacker) composeNextPacket(maxFrameSize protocol.ByteCount, onlyAc
 				// Path probing is currently not supported, therefore we don't need to set the OnAcked callback yet.
 				// PATH_CHALLENGE and PATH_RESPONSE are never retransmitted.
 			case *wire.TimestampFrame:
-				// Timestamp Frames are not retransmitted.
+				// Timestamp Frames are never retransmitted.
 			default:
 				pl.frames[i].Handler = p.retransmissionQueue.AppDataAckHandler()
 			}
