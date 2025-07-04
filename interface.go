@@ -351,8 +351,8 @@ type Config struct {
 	// Enable QUIC datagram support (RFC 9221).
 	EnableDatagrams bool
 	Tracer          func(context.Context, logging.Perspective, ConnectionID) *logging.ConnectionTracer
-	// Disables the internal congestion controller
-	DisableCC      CCType
+	// What CC to use: Reno, none or pacer only
+	CcType         CCType
 	DisablePnSkips bool
 }
 

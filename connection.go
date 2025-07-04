@@ -286,7 +286,7 @@ var newConnection = func(
 		s.perspective,
 		s.tracer,
 		s.logger,
-		ccToInternalCC(conf.DisableCC),
+		ccToInternalCC(conf.CcType),
 		s.config.DisablePnSkips,
 	)
 	s.maxPayloadSizeEstimate.Store(uint32(estimateMaxPayloadSize(protocol.ByteCount(s.config.InitialPacketSize))))
@@ -398,7 +398,7 @@ var newClientConnection = func(
 		s.perspective,
 		s.tracer,
 		s.logger,
-		ccToInternalCC(conf.DisableCC),
+		ccToInternalCC(conf.CcType),
 		s.config.DisablePnSkips,
 	)
 	s.maxPayloadSizeEstimate.Store(uint32(estimateMaxPayloadSize(protocol.ByteCount(s.config.InitialPacketSize))))
@@ -1540,7 +1540,7 @@ func (s *connection) handleDatagramFrame(f *wire.DatagramFrame) error {
 	if f.Length(s.version) > wire.MaxDatagramSize {
 		return &qerr.TransportError{
 			ErrorCode:    qerr.ProtocolViolation,
-			ErrorMessage: "DATAGRAM frame too large",
+			ErrorMessage: fmt.Sprintf("DATAGRAM frame too large; max: %v, actual: %v", wire.MaxDatagramSize, f.Length(s.version)),
 		}
 	}
 	s.datagramQueue.HandleDatagramFrame(f)
@@ -2411,7 +2411,7 @@ func (s *connection) SendDatagram(p []byte) error {
 		protocol.ByteCount(s.maxPayloadSizeEstimate.Load()),
 	)
 	if protocol.ByteCount(len(p)) > maxDataLen {
-		return &DatagramTooLargeError{MaxDatagramPayloadSize: int64(maxDataLen)}
+		return &DatagramTooLargeError{MaxDatagramPayloadSize: int64(maxDataLen), ActualSize: int64(protocol.ByteCount(len(p)))}
 	}
 	f.Data = make([]byte, len(p))
 	copy(f.Data, p)

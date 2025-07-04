@@ -125,7 +125,7 @@ func populateConfig(config *Config) *Config {
 		DisablePathMTUDiscovery:        config.DisablePathMTUDiscovery,
 		Allow0RTT:                      config.Allow0RTT,
 		Tracer:                         config.Tracer,
-		DisableCC:                      config.DisableCC,
+		CcType:                         config.CcType,
 		DisablePnSkips:                 config.DisablePnSkips,
 	}
 }

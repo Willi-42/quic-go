@@ -19,9 +19,9 @@ func NewAckHandler(
 	pers protocol.Perspective,
 	tracer *logging.ConnectionTracer,
 	logger utils.Logger,
-	disableCC congestion.InternalccType,
+	ccType congestion.InternalccType,
 	disablePnSkips bool,
 ) (SentPacketHandler, ReceivedPacketHandler) {
-	sph := newSentPacketHandler(initialPacketNumber, initialMaxDatagramSize, rttStats, clientAddressValidated, enableECN, pers, tracer, logger, disableCC, disablePnSkips)
+	sph := newSentPacketHandler(initialPacketNumber, initialMaxDatagramSize, rttStats, clientAddressValidated, enableECN, pers, tracer, logger, ccType, disablePnSkips)
 	return sph, newReceivedPacketHandler(sph, logger)
 }

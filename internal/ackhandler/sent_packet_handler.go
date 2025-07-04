@@ -117,13 +117,13 @@ func newSentPacketHandler(
 	pers protocol.Perspective,
 	tracer *logging.ConnectionTracer,
 	logger utils.Logger,
-	disableCC congestion.InternalccType,
+	ccType congestion.InternalccType,
 	disablePnSkips bool,
 ) *sentPacketHandler {
 
 	var cc congestion.SendAlgorithmWithDebugInfos
 
-	switch disableCC {
+	switch ccType {
 	case congestion.DefaultCC:
 		cc = congestion.NewCubicSender(
 			congestion.DefaultClock{},
@@ -133,7 +133,10 @@ func newSentPacketHandler(
 			tracer,
 		)
 	case congestion.PacerOnly:
-		// TODO
+		cc = congestion.NewPacerOnlySendAlgorithm(congestion.DefaultClock{},
+			rttStats,
+			initialMaxDatagramSize,
+			tracer)
 	case congestion.DisabledCC:
 		cc = congestion.NoOpSendAlgorithm{}
 	}
