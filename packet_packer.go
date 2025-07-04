@@ -722,7 +722,7 @@ func (p *packetPacker) composeNextPacket(
 		pl.frames, pl.streamFrames, lengthAdded = p.framer.Append(pl.frames, pl.streamFrames, maxPayloadSize-pl.length, now, v)
 		pl.length += lengthAdded
 
-		if p.sendTimestamps && !tsAdded && pl.length+tsLen <= maxFrameSize-pl.length {
+		if p.sendTimestamps && !tsAdded && pl.length+tsLen <= maxPayloadSize-pl.length {
 			pl.frames = append(pl.frames, ackhandler.Frame{Frame: &tsframe})
 			pl.length += tsLen
 		}

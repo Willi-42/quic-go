@@ -187,16 +187,16 @@ type Config struct {
 	Allow0RTT bool
 	// Enable QUIC datagram support (RFC 9221).
 	EnableDatagrams bool
+	// Enable QUIC Stream Resets with Partial Delivery.
+	// See https://datatracker.ietf.org/doc/html/draft-ietf-quic-reliable-stream-reset-07.
+	EnableStreamResetPartialDelivery bool
+	Tracer                           func(context.Context, logging.Perspective, ConnectionID) *logging.ConnectionTracer
 	// What CC to use: Reno, none or pacer only
 	CcType CCType
 	// Disables the packet number skipping of quic. Use with care.
 	DisablePnSkips bool
 	// Send timestamp frame with each packet.
 	SendTimestamps bool
-	// Enable QUIC Stream Resets with Partial Delivery.
-	// See https://datatracker.ietf.org/doc/html/draft-ietf-quic-reliable-stream-reset-07.
-	EnableStreamResetPartialDelivery bool
-	Tracer                           func(context.Context, logging.Perspective, ConnectionID) *logging.ConnectionTracer
 }
 
 // ClientHelloInfo contains information about an incoming connection attempt.

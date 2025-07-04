@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/quic-go/quic-go/internal/congestion"
 	"github.com/quic-go/quic-go/internal/mocks"
 	mocklogging "github.com/quic-go/quic-go/internal/mocks/logging"
 	"github.com/quic-go/quic-go/internal/protocol"
@@ -112,6 +113,8 @@ func testSentPacketHandlerSendAndAcknowledge(t *testing.T, encLevel protocol.Enc
 		protocol.PerspectiveClient,
 		nil,
 		utils.DefaultLogger,
+		congestion.DefaultCC,
+		false,
 	)
 
 	var packets packetTracker
@@ -165,6 +168,8 @@ func TestSentPacketHandlerAcknowledgeSkippedPacket(t *testing.T) {
 		protocol.PerspectiveClient,
 		nil,
 		utils.DefaultLogger,
+		congestion.DefaultCC,
+		false,
 	)
 
 	now := time.Now()
@@ -219,6 +224,8 @@ func testSentPacketHandlerRTTs(t *testing.T, encLevel protocol.EncryptionLevel, 
 		protocol.PerspectiveClient,
 		nil,
 		utils.DefaultLogger,
+		congestion.DefaultCC,
+		false,
 	)
 
 	sendPacket := func(ti time.Time) protocol.PacketNumber {
@@ -307,6 +314,8 @@ func testSentPacketHandlerAmplificationLimitServer(t *testing.T, addressValidate
 		protocol.PerspectiveServer,
 		nil,
 		utils.DefaultLogger,
+		congestion.DefaultCC,
+		false,
 	)
 
 	if addressValidated {
@@ -376,6 +385,8 @@ func testSentPacketHandlerAmplificationLimitClient(t *testing.T, dropHandshake b
 		protocol.PerspectiveClient,
 		nil,
 		utils.DefaultLogger,
+		congestion.DefaultCC,
+		false,
 	)
 
 	require.Equal(t, SendAny, sph.SendMode(time.Now()))
@@ -430,6 +441,8 @@ func TestSentPacketHandlerDelayBasedLossDetection(t *testing.T) {
 		protocol.PerspectiveServer,
 		nil,
 		utils.DefaultLogger,
+		congestion.DefaultCC,
+		false,
 	)
 
 	var packets packetTracker
@@ -482,6 +495,8 @@ func TestSentPacketHandlerPacketBasedLossDetection(t *testing.T) {
 		protocol.PerspectiveServer,
 		nil,
 		utils.DefaultLogger,
+		congestion.DefaultCC,
+		false,
 	)
 
 	var packets packetTracker
@@ -546,6 +561,8 @@ func testSentPacketHandlerPTO(t *testing.T, encLevel protocol.EncryptionLevel, p
 		protocol.PerspectiveServer,
 		tracer,
 		utils.DefaultLogger,
+		congestion.DefaultCC,
+		false,
 	)
 
 	// in the application-data packet number space, the PTO is only set
@@ -685,6 +702,8 @@ func TestSentPacketHandlerPacketNumberSpacesPTO(t *testing.T) {
 		protocol.PerspectiveServer,
 		nil,
 		utils.DefaultLogger,
+		congestion.DefaultCC,
+		false,
 	)
 
 	sendPacket := func(ti time.Time, encLevel protocol.EncryptionLevel) protocol.PacketNumber {
@@ -775,6 +794,8 @@ func TestSentPacketHandler0RTT(t *testing.T) {
 		protocol.PerspectiveClient,
 		nil,
 		utils.DefaultLogger,
+		congestion.DefaultCC,
+		false,
 	)
 
 	var appDataPackets packetTracker
@@ -824,6 +845,8 @@ func TestSentPacketHandlerCongestion(t *testing.T) {
 		protocol.PerspectiveServer,
 		nil,
 		utils.DefaultLogger,
+		congestion.DefaultCC,
+		false,
 	)
 	sph.congestion = cong
 
@@ -923,6 +946,8 @@ func testSentPacketHandlerRetry(t *testing.T, rtt, expectedRTT time.Duration) {
 		protocol.PerspectiveClient,
 		nil,
 		utils.DefaultLogger,
+		congestion.DefaultCC,
+		false,
 	)
 
 	start := time.Now()
@@ -973,6 +998,8 @@ func TestSentPacketHandlerRetryAfterPTO(t *testing.T) {
 		protocol.PerspectiveClient,
 		nil,
 		utils.DefaultLogger,
+		congestion.DefaultCC,
+		false,
 	)
 
 	var packets packetTracker
@@ -1016,6 +1043,8 @@ func TestSentPacketHandlerECN(t *testing.T) {
 		protocol.PerspectiveClient,
 		nil,
 		utils.DefaultLogger,
+		congestion.DefaultCC,
+		false,
 	)
 	sph.ecnTracker = ecnHandler
 	sph.congestion = cong
@@ -1118,6 +1147,8 @@ func TestSentPacketHandlerPathProbe(t *testing.T) {
 		protocol.PerspectiveClient,
 		nil,
 		utils.DefaultLogger,
+		congestion.DefaultCC,
+		false,
 	)
 	sph.DropPackets(protocol.EncryptionInitial, time.Now())
 	sph.DropPackets(protocol.EncryptionHandshake, time.Now())
@@ -1196,6 +1227,8 @@ func TestSentPacketHandlerPathProbeAckAndLoss(t *testing.T) {
 		protocol.PerspectiveClient,
 		nil,
 		utils.DefaultLogger,
+		congestion.DefaultCC,
+		false,
 	)
 	sph.DropPackets(protocol.EncryptionInitial, time.Now())
 	sph.DropPackets(protocol.EncryptionHandshake, time.Now())
@@ -1270,6 +1303,8 @@ func testSentPacketHandlerRandomized(t *testing.T, seed uint64) {
 		protocol.PerspectiveClient,
 		nil,
 		utils.DefaultLogger,
+		congestion.DefaultCC,
+		false,
 	)
 	sph.DropPackets(protocol.EncryptionInitial, time.Now())
 	sph.DropPackets(protocol.EncryptionHandshake, time.Now())

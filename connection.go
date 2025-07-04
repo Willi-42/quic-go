@@ -1734,14 +1734,14 @@ func (c *Conn) handleDatagramFrame(f *wire.DatagramFrame) error {
 	if f.Length(c.version) > wire.MaxDatagramSize {
 		return &qerr.TransportError{
 			ErrorCode:    qerr.ProtocolViolation,
-			ErrorMessage: fmt.Sprintf("DATAGRAM frame too large; max: %v, actual: %v", wire.MaxDatagramSize, f.Length(s.version)),
+			ErrorMessage: fmt.Sprintf("DATAGRAM frame too large; max: %v, actual: %v", wire.MaxDatagramSize, f.Length(c.version)),
 		}
 	}
 	c.datagramQueue.HandleDatagramFrame(f)
 	return nil
 }
 
-func (s *connection) handleTimestampFrame(_ *wire.TimestampFrame) error {
+func (s *Conn) handleTimestampFrame(_ *wire.TimestampFrame) error {
 	// app gets informed about timestamp in ReceivedShortHeaderPacket tracer
 	// nothing to do here
 
