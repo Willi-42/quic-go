@@ -19,6 +19,23 @@ Support for WebTransport over HTTP/3 ([draft-ietf-webtrans-http3](https://datatr
 
 Detailed documentation can be found on [quic-go.net](https://quic-go.net/docs/).
 
+## Modifications of this fork
+* Sent timestamp extension.
+* Option to disable packet number skips. **WARNING**: Deactivates ability to detect optimistic acknowledgment attacks.
+* Option to deactivate the congestion controller or only use a pacer. **WARNING**: not negotiated.
+
+`quic.Config` has these new values:
+
+```go
+// What CC to use: Reno, none or pacer only
+CcType CCType
+// Disables the packet number skipping of quic. Use with care.
+DisablePnSkips bool
+// Send timestamp frame with each packet.
+SendTimestamps bool
+```
+
+
 ## Projects using quic-go
 
 | Project                                                   | Description                                                                                                                                                       | Stars                                                                                               |
