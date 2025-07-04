@@ -274,7 +274,7 @@ func TestDropsKeys3PTOsAfterKeyUpdate(t *testing.T) {
 	client, server, serverTracer := setupEndpoints(t, &rttStats)
 
 	now := time.Now()
-	rttStats.UpdateRTT(10*time.Millisecond, 0, now)
+	rttStats.UpdateRTT(10*time.Millisecond, 0)
 	pto := rttStats.PTO(true)
 	encrypted01 := client.Seal(nil, []byte(msg), 0x42, []byte(ad))
 	encrypted02 := client.Seal(nil, []byte(msg), 0x43, []byte(ad))
@@ -329,17 +329,14 @@ func TestRejectFrequentKeyUpdates(t *testing.T) {
 	}, err)
 }
 
-//nolint:unparam
 func setKeyUpdateIntervals(t *testing.T, firstKeyUpdateInterval, keyUpdateInterval uint64) {
-	origKeyUpdateInterval := KeyUpdateInterval
+	reset := SetKeyUpdateInterval(keyUpdateInterval)
+	t.Cleanup(reset)
+
 	origFirstKeyUpdateInterval := FirstKeyUpdateInterval
-	KeyUpdateInterval = keyUpdateInterval
 	FirstKeyUpdateInterval = firstKeyUpdateInterval
 
-	t.Cleanup(func() {
-		KeyUpdateInterval = origKeyUpdateInterval
-		FirstKeyUpdateInterval = origFirstKeyUpdateInterval
-	})
+	t.Cleanup(func() { FirstKeyUpdateInterval = origFirstKeyUpdateInterval })
 }
 
 func TestInitiateKeyUpdateAfterSendingMaxPackets(t *testing.T) {
@@ -383,7 +380,7 @@ func TestInitiateKeyUpdateAfterSendingMaxPackets(t *testing.T) {
 
 func TestKeyUpdateEnforceACKKeyPhase(t *testing.T) {
 	const firstKeyUpdateInterval = 5
-	setKeyUpdateIntervals(t, firstKeyUpdateInterval, KeyUpdateInterval)
+	setKeyUpdateIntervals(t, firstKeyUpdateInterval, protocol.KeyUpdateInterval)
 
 	_, server, serverTracer := setupEndpoints(t, &utils.RTTStats{})
 	server.SetHandshakeConfirmed()
@@ -467,7 +464,7 @@ func TestKeyUpdateKeyPhaseSkipping(t *testing.T) {
 	setKeyUpdateIntervals(t, firstKeyUpdateInterval, keyUpdateInterval)
 
 	var rttStats utils.RTTStats
-	rttStats.UpdateRTT(10*time.Millisecond, 0, time.Now())
+	rttStats.UpdateRTT(10*time.Millisecond, 0)
 	client, server, serverTracer := setupEndpoints(t, &rttStats)
 	server.SetHandshakeConfirmed()
 
@@ -539,7 +536,7 @@ func TestFastKeyUpdateByUs(t *testing.T) {
 	setKeyUpdateIntervals(t, firstKeyUpdateInterval, keyUpdateInterval)
 
 	var rttStats utils.RTTStats
-	rttStats.UpdateRTT(10*time.Millisecond, 0, time.Now())
+	rttStats.UpdateRTT(10*time.Millisecond, 0)
 	client, server, serverTracer := setupEndpoints(t, &rttStats)
 	server.SetHandshakeConfirmed()
 

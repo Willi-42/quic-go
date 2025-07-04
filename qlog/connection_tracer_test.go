@@ -134,18 +134,15 @@ func TestHandshakeTimeouts(t *testing.T) {
 
 func TestReceivedStatelessResetPacket(t *testing.T) {
 	tracer, buf := newConnectionTracer()
-	tracer.ClosedConnection(&quic.StatelessResetError{
-		Token: protocol.StatelessResetToken{0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff},
-	})
+	tracer.ClosedConnection(&quic.StatelessResetError{})
 	tracer.Close()
 	entry := exportAndParseSingle(t, buf)
 	require.WithinDuration(t, time.Now(), entry.Time, scaleDuration(10*time.Millisecond))
 	require.Equal(t, "transport:connection_closed", entry.Name)
 	ev := entry.Event
-	require.Len(t, ev, 3)
+	require.Len(t, ev, 2)
 	require.Equal(t, "remote", ev["owner"])
 	require.Equal(t, "stateless_reset", ev["trigger"])
-	require.Equal(t, "00112233445566778899aabbccddeeff", ev["stateless_reset_token"])
 }
 
 func TestVersionNegotiationFailure(t *testing.T) {
@@ -216,6 +213,7 @@ func TestSentTransportParameters(t *testing.T) {
 		RetrySourceConnectionID:         &rcid,
 		ActiveConnectionIDLimit:         7,
 		MaxDatagramFrameSize:            protocol.InvalidByteCount,
+		EnableResetStreamAt:             true,
 	})
 	tracer.Close()
 	entry := exportAndParseSingle(t, buf)
@@ -237,6 +235,7 @@ func TestSentTransportParameters(t *testing.T) {
 	require.Equal(t, float64(3000), ev["initial_max_stream_data_uni"])
 	require.Equal(t, float64(10), ev["initial_max_streams_bidi"])
 	require.Equal(t, float64(20), ev["initial_max_streams_uni"])
+	require.True(t, ev["reset_stream_at"].(bool))
 	require.NotContains(t, ev, "preferred_address")
 	require.NotContains(t, ev, "max_datagram_frame_size")
 }
@@ -270,15 +269,32 @@ func TestTransportParametersWithoutRetrySourceConnectionID(t *testing.T) {
 }
 
 func TestTransportParametersWithPreferredAddress(t *testing.T) {
-	tracer, buf := newConnectionTracer()
-	tracer.SentTransportParameters(&logging.TransportParameters{
-		PreferredAddress: &logging.PreferredAddress{
-			IPv4:                netip.AddrPortFrom(netip.AddrFrom4([4]byte{12, 34, 56, 78}), 123),
-			IPv6:                netip.AddrPortFrom(netip.AddrFrom16([16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}), 456),
-			ConnectionID:        protocol.ParseConnectionID([]byte{8, 7, 6, 5, 4, 3, 2, 1}),
-			StatelessResetToken: protocol.StatelessResetToken{15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
-		},
+	t.Run("IPv4 and IPv6", func(t *testing.T) {
+		testTransportParametersWithPreferredAddress(t, true, true)
 	})
+	t.Run("IPv4 only", func(t *testing.T) {
+		testTransportParametersWithPreferredAddress(t, true, false)
+	})
+	t.Run("IPv6 only", func(t *testing.T) {
+		testTransportParametersWithPreferredAddress(t, false, true)
+	})
+}
+
+func testTransportParametersWithPreferredAddress(t *testing.T, hasIPv4, hasIPv6 bool) {
+	addr4 := netip.AddrPortFrom(netip.AddrFrom4([4]byte{12, 34, 56, 78}), 123)
+	addr6 := netip.AddrPortFrom(netip.AddrFrom16([16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}), 456)
+	tracer, buf := newConnectionTracer()
+	preferredAddress := &logging.PreferredAddress{
+		ConnectionID:        protocol.ParseConnectionID([]byte{8, 7, 6, 5, 4, 3, 2, 1}),
+		StatelessResetToken: protocol.StatelessResetToken{15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
+	}
+	if hasIPv4 {
+		preferredAddress.IPv4 = addr4
+	}
+	if hasIPv6 {
+		preferredAddress.IPv6 = addr6
+	}
+	tracer.SentTransportParameters(&logging.TransportParameters{PreferredAddress: preferredAddress})
 	tracer.Close()
 	entry := exportAndParseSingle(t, buf)
 	require.WithinDuration(t, time.Now(), entry.Time, scaleDuration(10*time.Millisecond))
@@ -287,10 +303,20 @@ func TestTransportParametersWithPreferredAddress(t *testing.T) {
 	require.Equal(t, "local", ev["owner"])
 	require.Contains(t, ev, "preferred_address")
 	pa := ev["preferred_address"].(map[string]interface{})
-	require.Equal(t, "12.34.56.78", pa["ip_v4"])
-	require.Equal(t, float64(123), pa["port_v4"])
-	require.Equal(t, "102:304:506:708:90a:b0c:d0e:f10", pa["ip_v6"])
-	require.Equal(t, float64(456), pa["port_v6"])
+	if hasIPv4 {
+		require.Equal(t, "12.34.56.78", pa["ip_v4"])
+		require.Equal(t, float64(123), pa["port_v4"])
+	} else {
+		require.NotContains(t, pa, "ip_v4")
+		require.NotContains(t, pa, "port_v4")
+	}
+	if hasIPv6 {
+		require.Equal(t, "102:304:506:708:90a:b0c:d0e:f10", pa["ip_v6"])
+		require.Equal(t, float64(456), pa["port_v6"])
+	} else {
+		require.NotContains(t, pa, "ip_v6")
+		require.NotContains(t, pa, "port_v6")
+	}
 	require.Equal(t, "0807060504030201", pa["connection_id"])
 	require.Equal(t, "0f0e0d0c0b0a09080706050403020100", pa["stateless_reset_token"])
 }
@@ -605,11 +631,10 @@ func TestDroppedPacketWithPacketNumber(t *testing.T) {
 }
 
 func TestUpdatedMetrics(t *testing.T) {
-	now := time.Now()
 	var rttStats utils.RTTStats
-	rttStats.UpdateRTT(15*time.Millisecond, 0, now)
-	rttStats.UpdateRTT(20*time.Millisecond, 0, now)
-	rttStats.UpdateRTT(25*time.Millisecond, 0, now)
+	rttStats.UpdateRTT(15*time.Millisecond, 0)
+	rttStats.UpdateRTT(20*time.Millisecond, 0)
+	rttStats.UpdateRTT(25*time.Millisecond, 0)
 	tracer, buf := newConnectionTracer()
 	tracer.UpdatedMetrics(&rttStats, 4321, 1234, 42)
 	tracer.Close()
@@ -628,24 +653,24 @@ func TestUpdatedMetrics(t *testing.T) {
 	require.Equal(t, float64(42), ev["packets_in_flight"])
 }
 
-func TestDiffForOnlyChangedMetrics(t *testing.T) {
-	now := time.Now()
+func TestUpdatedMetricsDiff(t *testing.T) {
 	var rttStats utils.RTTStats
-	rttStats.UpdateRTT(15*time.Millisecond, 0, now)
-	rttStats.UpdateRTT(20*time.Millisecond, 0, now)
-	rttStats.UpdateRTT(25*time.Millisecond, 0, now)
+	rttStats.UpdateRTT(15*time.Millisecond, 0)
+	rttStats.UpdateRTT(20*time.Millisecond, 0)
+	rttStats.UpdateRTT(25*time.Millisecond, 0)
 
 	var rttStats2 utils.RTTStats
-	rttStats2.UpdateRTT(15*time.Millisecond, 0, now)
-	rttStats2.UpdateRTT(15*time.Millisecond, 0, now)
-	rttStats2.UpdateRTT(15*time.Millisecond, 0, now)
+	rttStats2.UpdateRTT(15*time.Millisecond, 0)
+	rttStats2.UpdateRTT(15*time.Millisecond, 0)
+	rttStats2.UpdateRTT(15*time.Millisecond, 0)
 
 	tracer, buf := newConnectionTracer()
 	tracer.UpdatedMetrics(&rttStats, 4321, 1234, 42)
 	tracer.UpdatedMetrics(&rttStats2, 4321, 12345 /* changed */, 42)
+	tracer.UpdatedMetrics(&rttStats2, 0, 0, 0)
 	tracer.Close()
 	entries := exportAndParse(t, buf)
-	require.Len(t, entries, 2)
+	require.Len(t, entries, 3)
 	require.WithinDuration(t, time.Now(), entries[0].Time, scaleDuration(10*time.Millisecond))
 	require.Equal(t, "recovery:metrics_updated", entries[0].Name)
 	require.Len(t, entries[0].Event, 7)
@@ -657,6 +682,13 @@ func TestDiffForOnlyChangedMetrics(t *testing.T) {
 	require.NotContains(t, ev, "packets_in_flight")
 	require.Equal(t, float64(12345), ev["bytes_in_flight"])
 	require.Equal(t, float64(15), ev["smoothed_rtt"])
+	ev = entries[2].Event
+	require.Contains(t, ev, "congestion_window")
+	require.Contains(t, ev, "packets_in_flight")
+	require.Contains(t, ev, "bytes_in_flight")
+	require.Zero(t, ev["bytes_in_flight"])
+	require.Zero(t, ev["packets_in_flight"])
+	require.Zero(t, ev["congestion_window"])
 }
 
 func TestLostPackets(t *testing.T) {

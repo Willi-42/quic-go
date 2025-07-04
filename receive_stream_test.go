@@ -1,753 +1,775 @@
 package quic
 
 import (
-	"errors"
+	"fmt"
 	"io"
-	"runtime"
-	"sync"
+	"net"
+	"os"
 	"sync/atomic"
+	"testing"
 	"time"
 
 	"github.com/quic-go/quic-go/internal/mocks"
 	"github.com/quic-go/quic-go/internal/protocol"
 	"github.com/quic-go/quic-go/internal/wire"
 
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
-	"github.com/onsi/gomega/gbytes"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 )
 
-var _ = Describe("Receive Stream", func() {
-	const streamID protocol.StreamID = 1337
+type readerWithTimeout struct {
+	io.Reader
+	Timeout time.Duration
+}
 
-	var (
-		str            *receiveStream
-		strWithTimeout io.Reader // str wrapped with gbytes.TimeoutReader
-		mockFC         *mocks.MockStreamFlowController
-		mockSender     *MockStreamSender
+func (r *readerWithTimeout) Read(p []byte) (n int, err error) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		n, err = r.Reader.Read(p)
+	}()
+
+	select {
+	case <-done:
+		return n, err
+	case <-time.After(r.Timeout):
+		return 0, fmt.Errorf("read timeout after %s", r.Timeout)
+	}
+}
+
+func TestReceiveStreamReadData(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
+	str := newReceiveStream(42, nil, mockFC)
+
+	// read an entire frame
+	now := time.Now()
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(4), false, now)
+	mockFC.EXPECT().AddBytesRead(protocol.ByteCount(4))
+	require.NoError(t, str.handleStreamFrame(&wire.StreamFrame{Data: []byte{0xde, 0xad, 0xbe, 0xef}}, now))
+	b := make([]byte, 4)
+	n, err := (&readerWithTimeout{Reader: str, Timeout: time.Second}).Read(b)
+	require.NoError(t, err)
+	require.Equal(t, 4, n)
+	require.Equal(t, []byte{0xde, 0xad, 0xbe, 0xef}, b)
+
+	// split a frame across multiple reads
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(8), false, now)
+	mockFC.EXPECT().AddBytesRead(protocol.ByteCount(2)).Times(2)
+	require.NoError(t, str.handleStreamFrame(&wire.StreamFrame{Offset: 4, Data: []byte{0xca, 0xfe, 0xba, 0xbe}}, now))
+	b = make([]byte, 2)
+	n, err = (&readerWithTimeout{Reader: str, Timeout: time.Second}).Read(b)
+	require.NoError(t, err)
+	require.Equal(t, 2, n)
+	require.Equal(t, []byte{0xca, 0xfe}, b)
+	n, err = (&readerWithTimeout{Reader: str, Timeout: time.Second}).Read(b)
+	require.NoError(t, err)
+	require.Equal(t, 2, n)
+	require.Equal(t, []byte{0xba, 0xbe}, b)
+
+	// combine two frames
+	gomock.InOrder(
+		mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(11), false, now),
+		mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(14), false, now),
+		mockFC.EXPECT().AddBytesRead(protocol.ByteCount(3)).Times(2),
 	)
+	require.NoError(t, str.handleStreamFrame(&wire.StreamFrame{Offset: 8, Data: []byte{'f', 'o', 'o'}}, now))
+	require.NoError(t, str.handleStreamFrame(&wire.StreamFrame{Offset: 11, Data: []byte{'b', 'a', 'r'}}, now))
+	b = make([]byte, 6)
+	n, err = (&readerWithTimeout{Reader: str, Timeout: time.Second}).Read(b)
+	require.NoError(t, err)
+	require.Equal(t, 6, n)
+	require.Equal(t, []byte{'f', 'o', 'o', 'b', 'a', 'r'}, b)
 
-	BeforeEach(func() {
-		mockSender = NewMockStreamSender(mockCtrl)
-		mockFC = mocks.NewMockStreamFlowController(mockCtrl)
-		str = newReceiveStream(streamID, mockSender, mockFC)
+	// reordered frames
+	gomock.InOrder(
+		mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(20), false, now),
+		mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(17), false, now),
+		mockFC.EXPECT().AddBytesRead(protocol.ByteCount(3)).Times(2),
+	)
+	require.NoError(t, str.handleStreamFrame(&wire.StreamFrame{Offset: 17, Data: []byte{'b', 'a', 'z'}}, now))
+	require.NoError(t, str.handleStreamFrame(&wire.StreamFrame{Offset: 14, Data: []byte{'f', 'o', 'o'}}, now))
+	b = make([]byte, 6)
+	n, err = (&readerWithTimeout{Reader: str, Timeout: time.Second}).Read(b)
+	require.NoError(t, err)
+	require.Equal(t, 6, n)
+	require.Equal(t, []byte{'f', 'o', 'o', 'b', 'a', 'z'}, b)
+}
 
-		timeout := scaleDuration(250 * time.Millisecond)
-		strWithTimeout = gbytes.TimeoutReader(str, timeout)
+func TestReceiveStreamBlockRead(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
+	mockSender := NewMockStreamSender(mockCtrl)
+	str := newReceiveStream(42, mockSender, mockFC)
+
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(2), false, gomock.Any())
+	mockFC.EXPECT().AddBytesRead(protocol.ByteCount(2))
+	errChan := make(chan error, 1)
+	go func() {
+		frame := wire.StreamFrame{Data: []byte{0xDE, 0xAD}}
+		time.Sleep(scaleDuration(5 * time.Millisecond))
+		errChan <- str.handleStreamFrame(&frame, time.Now())
+	}()
+
+	n, err := (&readerWithTimeout{Reader: str, Timeout: time.Second}).Read(make([]byte, 2))
+	require.NoError(t, err)
+	require.Equal(t, 2, n)
+	require.NoError(t, <-errChan)
+}
+
+func TestReceiveStreamReadOverlappingData(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
+	str := newReceiveStream(42, nil, mockFC)
+
+	// receive the same frame multiple times
+	now := time.Now()
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(4), false, now).Times(3)
+	mockFC.EXPECT().AddBytesRead(protocol.ByteCount(4))
+	for i := 0; i < 3; i++ {
+		require.NoError(t, str.handleStreamFrame(&wire.StreamFrame{Data: []byte{0xde, 0xad, 0xbe, 0xef}}, now))
+	}
+	b := make([]byte, 4)
+	n, err := (&readerWithTimeout{Reader: str, Timeout: time.Second}).Read(b)
+	require.NoError(t, err)
+	require.Equal(t, 4, n)
+	require.Equal(t, []byte{0xde, 0xad, 0xbe, 0xef}, b)
+
+	// receive overlapping data
+	gomock.InOrder(
+		mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(8), false, now),
+		mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(10), false, now),
+		mockFC.EXPECT().AddBytesRead(protocol.ByteCount(4)),
+		mockFC.EXPECT().AddBytesRead(protocol.ByteCount(2)),
+	)
+	require.NoError(t, str.handleStreamFrame(&wire.StreamFrame{Offset: 4, Data: []byte{'f', 'o', 'o', 'b'}}, now))
+	require.NoError(t, str.handleStreamFrame(&wire.StreamFrame{Offset: 6, Data: []byte{'o', 'b', 'a', 'r'}}, now))
+	b = make([]byte, 6)
+	n, err = (&readerWithTimeout{Reader: str, Timeout: time.Second}).Read(b)
+	require.NoError(t, err)
+	require.Equal(t, 6, n)
+	require.Equal(t, []byte{'f', 'o', 'o', 'b', 'a', 'r'}, b)
+}
+
+func TestReceiveStreamFlowControlUpdates(t *testing.T) {
+	t.Run("stream", func(t *testing.T) {
+		testReceiveStreamFlowControlUpdates(t, true, false)
 	})
 
-	It("gets stream id", func() {
-		Expect(str.StreamID()).To(Equal(protocol.StreamID(1337)))
+	t.Run("connection", func(t *testing.T) {
+		testReceiveStreamFlowControlUpdates(t, false, true)
 	})
+}
 
-	Context("reading", func() {
-		It("reads a single STREAM frame", func() {
-			mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(4), false)
-			mockFC.EXPECT().AddBytesRead(protocol.ByteCount(4))
-			frame := wire.StreamFrame{
-				Offset: 0,
-				Data:   []byte{0xDE, 0xAD, 0xBE, 0xEF},
-			}
-			Expect(str.handleStreamFrame(&frame)).To(Succeed())
-			b := make([]byte, 4)
-			n, err := strWithTimeout.Read(b)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(n).To(Equal(4))
-			Expect(b).To(Equal([]byte{0xDE, 0xAD, 0xBE, 0xEF}))
-		})
+func testReceiveStreamFlowControlUpdates(t *testing.T, hasStreamWindowUpdate, hasConnWindowUpdate bool) {
+	const streamID protocol.StreamID = 42
+	mockCtrl := gomock.NewController(t)
+	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
+	mockSender := NewMockStreamSender(mockCtrl)
+	str := newReceiveStream(streamID, mockSender, mockFC)
 
-		It("reads a single STREAM frame in multiple goes", func() {
-			mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(4), false)
-			mockFC.EXPECT().AddBytesRead(protocol.ByteCount(2))
-			mockFC.EXPECT().AddBytesRead(protocol.ByteCount(2))
-			frame := wire.StreamFrame{
-				Offset: 0,
-				Data:   []byte{0xDE, 0xAD, 0xBE, 0xEF},
-			}
-			Expect(str.handleStreamFrame(&frame)).To(Succeed())
-			b := make([]byte, 2)
-			n, err := strWithTimeout.Read(b)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(n).To(Equal(2))
-			Expect(b).To(Equal([]byte{0xDE, 0xAD}))
-			n, err = strWithTimeout.Read(b)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(n).To(Equal(2))
-			Expect(b).To(Equal([]byte{0xBE, 0xEF}))
-		})
+	now := time.Now()
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(4), false, now)
+	require.NoError(t, str.handleStreamFrame(&wire.StreamFrame{Data: []byte{0xde, 0xad, 0xbe, 0xef}}, now))
 
-		It("queues a flow control update", func() {
-			mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(4), false)
-			mockFC.EXPECT().AddBytesRead(protocol.ByteCount(3)).Return(true)
-			frame := wire.StreamFrame{
-				Offset: 0,
-				Data:   []byte{0xde, 0xad, 0xbe, 0xef},
-			}
-			Expect(str.handleStreamFrame(&frame)).To(Succeed())
-			mockSender.EXPECT().onHasStreamControlFrame(streamID, str)
-			n, err := strWithTimeout.Read(make([]byte, 3))
-			Expect(err).ToNot(HaveOccurred())
-			Expect(n).To(Equal(3))
-			mockFC.EXPECT().GetWindowUpdate().Return(protocol.ByteCount(1337))
-			f, ok, hasMore := str.getControlFrame()
-			Expect(ok).To(BeTrue())
-			Expect(f.Frame).To(Equal(&wire.MaxStreamDataFrame{StreamID: streamID, MaximumStreamData: 1337}))
-			Expect(hasMore).To(BeFalse())
-		})
+	mockFC.EXPECT().AddBytesRead(protocol.ByteCount(3)).Return(hasStreamWindowUpdate, hasConnWindowUpdate)
+	if hasStreamWindowUpdate {
+		mockSender.EXPECT().onHasStreamControlFrame(streamID, str)
+	}
+	if hasConnWindowUpdate {
+		mockSender.EXPECT().onHasConnectionData()
+	}
+	n, err := (&readerWithTimeout{Reader: str, Timeout: time.Second}).Read(make([]byte, 3))
+	require.NoError(t, err)
+	require.Equal(t, 3, n)
+	require.True(t, mockCtrl.Satisfied())
 
-		It("reads all data available", func() {
-			mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(2), false)
-			mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(4), false)
-			mockFC.EXPECT().AddBytesRead(protocol.ByteCount(2)).Times(2)
-			frame1 := wire.StreamFrame{
-				Offset: 0,
-				Data:   []byte{0xDE, 0xAD},
-			}
-			frame2 := wire.StreamFrame{
-				Offset: 2,
-				Data:   []byte{0xBE, 0xEF},
-			}
-			err := str.handleStreamFrame(&frame1)
-			Expect(err).ToNot(HaveOccurred())
-			err = str.handleStreamFrame(&frame2)
-			Expect(err).ToNot(HaveOccurred())
-			b := make([]byte, 6)
-			n, err := strWithTimeout.Read(b)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(n).To(Equal(4))
-			Expect(b).To(Equal([]byte{0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x00}))
-		})
+	if hasStreamWindowUpdate {
+		now = now.Add(time.Second)
+		mockFC.EXPECT().GetWindowUpdate(now).Return(protocol.ByteCount(1337))
+		f, ok, hasMore := str.getControlFrame(now)
+		require.True(t, ok)
+		require.Equal(t, &wire.MaxStreamDataFrame{StreamID: streamID, MaximumStreamData: 1337}, f.Frame)
+		require.False(t, hasMore)
+	}
+	if hasConnWindowUpdate {
+		_, ok, hasMore := str.getControlFrame(now)
+		require.False(t, ok)
+		require.False(t, hasMore)
+	}
+}
 
-		It("assembles multiple STREAM frames", func() {
-			mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(2), false)
-			mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(4), false)
-			mockFC.EXPECT().AddBytesRead(protocol.ByteCount(2)).Times(2)
-			frame1 := wire.StreamFrame{
-				Offset: 0,
-				Data:   []byte{0xDE, 0xAD},
-			}
-			frame2 := wire.StreamFrame{
-				Offset: 2,
-				Data:   []byte{0xBE, 0xEF},
-			}
-			err := str.handleStreamFrame(&frame1)
-			Expect(err).ToNot(HaveOccurred())
-			err = str.handleStreamFrame(&frame2)
-			Expect(err).ToNot(HaveOccurred())
-			b := make([]byte, 4)
-			n, err := strWithTimeout.Read(b)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(n).To(Equal(4))
-			Expect(b).To(Equal([]byte{0xDE, 0xAD, 0xBE, 0xEF}))
-		})
+func TestReceiveStreamDeadlineInThePast(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
+	str := newReceiveStream(42, nil, mockFC)
 
-		It("waits until data is available", func() {
-			mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(2), false)
-			mockFC.EXPECT().AddBytesRead(protocol.ByteCount(2))
-			go func() {
-				defer GinkgoRecover()
-				frame := wire.StreamFrame{Data: []byte{0xDE, 0xAD}}
-				time.Sleep(10 * time.Millisecond)
-				err := str.handleStreamFrame(&frame)
-				Expect(err).ToNot(HaveOccurred())
-			}()
-			b := make([]byte, 2)
-			n, err := strWithTimeout.Read(b)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(n).To(Equal(2))
-		})
+	// no data is read when the deadline is in the past
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(6), false, gomock.Any()).AnyTimes()
+	require.NoError(t, str.handleStreamFrame(&wire.StreamFrame{Data: []byte("foobar")}, time.Now()))
+	require.NoError(t, str.SetReadDeadline(time.Now().Add(-time.Second)))
+	b := make([]byte, 6)
+	n, err := (&readerWithTimeout{Reader: str, Timeout: time.Second}).Read(b)
+	require.Error(t, err)
+	require.Zero(t, n)
+	var nerr net.Error
+	require.ErrorAs(t, err, &nerr)
+	require.True(t, nerr.Timeout())
 
-		It("handles STREAM frames in wrong order", func() {
-			mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(2), false)
-			mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(4), false)
-			mockFC.EXPECT().AddBytesRead(protocol.ByteCount(2)).Times(2)
-			frame1 := wire.StreamFrame{
-				Offset: 2,
-				Data:   []byte{0xBE, 0xEF},
-			}
-			frame2 := wire.StreamFrame{
-				Offset: 0,
-				Data:   []byte{0xDE, 0xAD},
-			}
-			err := str.handleStreamFrame(&frame1)
-			Expect(err).ToNot(HaveOccurred())
-			err = str.handleStreamFrame(&frame2)
-			Expect(err).ToNot(HaveOccurred())
-			b := make([]byte, 4)
-			n, err := strWithTimeout.Read(b)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(n).To(Equal(4))
-			Expect(b).To(Equal([]byte{0xDE, 0xAD, 0xBE, 0xEF}))
-		})
+	// data is read when the deadline is in the future
+	require.NoError(t, str.SetReadDeadline(time.Now().Add(time.Second)))
+	mockFC.EXPECT().AddBytesRead(protocol.ByteCount(6))
+	n, err = (&readerWithTimeout{Reader: str, Timeout: time.Second}).Read(b)
+	require.NoError(t, err)
+	require.Equal(t, 6, n)
+}
 
-		It("ignores duplicate STREAM frames", func() {
-			mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(2), false)
-			mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(2), false)
-			mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(4), false)
-			mockFC.EXPECT().AddBytesRead(protocol.ByteCount(2)).Times(2)
-			frame1 := wire.StreamFrame{
-				Offset: 0,
-				Data:   []byte{0xDE, 0xAD},
-			}
-			frame2 := wire.StreamFrame{
-				Offset: 0,
-				Data:   []byte{0x13, 0x37},
-			}
-			frame3 := wire.StreamFrame{
-				Offset: 2,
-				Data:   []byte{0xBE, 0xEF},
-			}
-			err := str.handleStreamFrame(&frame1)
-			Expect(err).ToNot(HaveOccurred())
-			err = str.handleStreamFrame(&frame2)
-			Expect(err).ToNot(HaveOccurred())
-			err = str.handleStreamFrame(&frame3)
-			Expect(err).ToNot(HaveOccurred())
-			b := make([]byte, 4)
-			n, err := strWithTimeout.Read(b)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(n).To(Equal(4))
-			Expect(b).To(Equal([]byte{0xDE, 0xAD, 0xBE, 0xEF}))
-		})
+func TestReceiveStreamDeadlineRemoval(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
+	str := newReceiveStream(42, nil, mockFC)
 
-		It("doesn't rejects a STREAM frames with an overlapping data range", func() {
-			mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(4), false)
-			mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(6), false)
-			mockFC.EXPECT().AddBytesRead(protocol.ByteCount(2))
-			mockFC.EXPECT().AddBytesRead(protocol.ByteCount(4))
-			frame1 := wire.StreamFrame{
-				Offset: 0,
-				Data:   []byte("foob"),
-			}
-			frame2 := wire.StreamFrame{
-				Offset: 2,
-				Data:   []byte("obar"),
-			}
-			err := str.handleStreamFrame(&frame1)
-			Expect(err).ToNot(HaveOccurred())
-			err = str.handleStreamFrame(&frame2)
-			Expect(err).ToNot(HaveOccurred())
-			b := make([]byte, 6)
-			n, err := strWithTimeout.Read(b)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(n).To(Equal(6))
-			Expect(b).To(Equal([]byte("foobar")))
-		})
+	deadline := scaleDuration(20 * time.Millisecond)
+	require.NoError(t, str.SetReadDeadline(time.Now().Add(deadline)))
+	errChan := make(chan error, 1)
+	go func() {
+		_, err := (&readerWithTimeout{Reader: str, Timeout: 5 * time.Second}).Read([]byte{0})
+		errChan <- err
+	}()
+	select {
+	case err := <-errChan:
+		t.Fatalf("read should not have returned yet: %v", err)
+	case <-time.After(deadline / 2):
+	}
 
-		Context("deadlines", func() {
-			It("the deadline error has the right net.Error properties", func() {
-				Expect(errDeadline.Timeout()).To(BeTrue())
-				Expect(errDeadline).To(MatchError("deadline exceeded"))
-			})
+	// remove the deadline after a while (but before it expires)
+	require.NoError(t, str.SetReadDeadline(time.Time{}))
 
-			It("returns an error when Read is called after the deadline", func() {
-				mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(6), false).AnyTimes()
-				Expect(str.handleStreamFrame(&wire.StreamFrame{Data: []byte("foobar")})).To(Succeed())
-				str.SetReadDeadline(time.Now().Add(-time.Second))
-				b := make([]byte, 6)
-				n, err := strWithTimeout.Read(b)
-				Expect(err).To(MatchError(errDeadline))
-				Expect(n).To(BeZero())
-			})
+	select {
+	case err := <-errChan:
+		t.Fatalf("read should not have returned yet: %v", err)
+	case <-time.After(deadline):
+	}
 
-			It("unblocks when the deadline is changed to the past", func() {
-				str.SetReadDeadline(time.Now().Add(time.Hour))
-				done := make(chan struct{})
-				go func() {
-					defer GinkgoRecover()
-					_, err := str.Read(make([]byte, 6))
-					Expect(err).To(MatchError(errDeadline))
-					close(done)
-				}()
-				Consistently(done).ShouldNot(BeClosed())
-				str.SetReadDeadline(time.Now().Add(-time.Hour))
-				Eventually(done).Should(BeClosed())
-			})
+	// now set the deadline to the past to make Read return immediately
+	require.NoError(t, str.SetReadDeadline(time.Now().Add(-time.Second)))
+	select {
+	case err := <-errChan:
+		require.ErrorIs(t, err, os.ErrDeadlineExceeded)
+	case <-time.After(time.Second):
+		t.Fatal("timeout")
+	}
+}
 
-			It("unblocks after the deadline", func() {
-				deadline := time.Now().Add(scaleDuration(50 * time.Millisecond))
-				str.SetReadDeadline(deadline)
-				b := make([]byte, 6)
-				n, err := strWithTimeout.Read(b)
-				Expect(err).To(MatchError(errDeadline))
-				Expect(n).To(BeZero())
-				Expect(time.Now()).To(BeTemporally("~", deadline, scaleDuration(20*time.Millisecond)))
-			})
+func TestReceiveStreamDeadlineExtension(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
+	str := newReceiveStream(42, nil, mockFC)
 
-			It("doesn't unblock if the deadline is changed before the first one expires", func() {
-				deadline1 := time.Now().Add(scaleDuration(50 * time.Millisecond))
-				deadline2 := time.Now().Add(scaleDuration(100 * time.Millisecond))
-				str.SetReadDeadline(deadline1)
-				go func() {
-					defer GinkgoRecover()
-					time.Sleep(scaleDuration(20 * time.Millisecond))
-					str.SetReadDeadline(deadline2)
-					// make sure that this was actually execute before the deadline expires
-					Expect(time.Now()).To(BeTemporally("<", deadline1))
-				}()
-				runtime.Gosched()
-				b := make([]byte, 10)
-				n, err := strWithTimeout.Read(b)
-				Expect(err).To(MatchError(errDeadline))
-				Expect(n).To(BeZero())
-				Expect(time.Now()).To(BeTemporally("~", deadline2, scaleDuration(20*time.Millisecond)))
-			})
+	deadline := scaleDuration(20 * time.Millisecond)
+	require.NoError(t, str.SetReadDeadline(time.Now().Add(deadline)))
+	errChan := make(chan error, 1)
+	go func() {
+		_, err := (&readerWithTimeout{Reader: str, Timeout: 5 * time.Second}).Read([]byte{0})
+		errChan <- err
+	}()
+	select {
+	case err := <-errChan:
+		t.Fatalf("read should not have returned yet: %v", err)
+	case <-time.After(deadline / 2):
+	}
 
-			It("unblocks earlier, when a new deadline is set", func() {
-				deadline1 := time.Now().Add(scaleDuration(200 * time.Millisecond))
-				deadline2 := time.Now().Add(scaleDuration(50 * time.Millisecond))
-				go func() {
-					defer GinkgoRecover()
-					time.Sleep(scaleDuration(10 * time.Millisecond))
-					str.SetReadDeadline(deadline2)
-					// make sure that this was actually execute before the deadline expires
-					Expect(time.Now()).To(BeTemporally("<", deadline2))
-				}()
-				str.SetReadDeadline(deadline1)
-				runtime.Gosched()
-				b := make([]byte, 10)
-				_, err := strWithTimeout.Read(b)
-				Expect(err).To(MatchError(errDeadline))
-				Expect(time.Now()).To(BeTemporally("~", deadline2, scaleDuration(25*time.Millisecond)))
-			})
+	// extend the deadline
+	require.NoError(t, str.SetReadDeadline(time.Now().Add(deadline)))
+	select {
+	case err := <-errChan:
+		require.ErrorIs(t, err, os.ErrDeadlineExceeded)
+	case <-time.After(deadline * 3 / 2):
+		t.Fatal("timeout")
+	}
+}
 
-			It("doesn't unblock if the deadline is removed", func() {
-				deadline := time.Now().Add(scaleDuration(50 * time.Millisecond))
-				str.SetReadDeadline(deadline)
-				deadlineUnset := make(chan struct{})
-				go func() {
-					defer GinkgoRecover()
-					time.Sleep(scaleDuration(20 * time.Millisecond))
-					str.SetReadDeadline(time.Time{})
-					// make sure that this was actually execute before the deadline expires
-					Expect(time.Now()).To(BeTemporally("<", deadline))
-					close(deadlineUnset)
-				}()
-				done := make(chan struct{})
-				go func() {
-					defer GinkgoRecover()
-					_, err := strWithTimeout.Read(make([]byte, 1))
-					Expect(err).To(MatchError("test done"))
-					close(done)
-				}()
-				runtime.Gosched()
-				Eventually(deadlineUnset).Should(BeClosed())
-				Consistently(done, scaleDuration(100*time.Millisecond)).ShouldNot(BeClosed())
-				// make the go routine return
-				str.closeForShutdown(errors.New("test done"))
-				Eventually(done).Should(BeClosed())
-			})
-		})
+func TestReceiveStreamEOFWithData(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
+	mockSender := NewMockStreamSender(mockCtrl)
+	str := newReceiveStream(42, mockSender, mockFC)
 
-		Context("closing", func() {
-			Context("with FIN bit", func() {
-				It("returns EOFs", func() {
-					mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(4), true)
-					mockFC.EXPECT().AddBytesRead(protocol.ByteCount(4))
-					str.handleStreamFrame(&wire.StreamFrame{
-						Offset: 0,
-						Data:   []byte{0xDE, 0xAD, 0xBE, 0xEF},
-						Fin:    true,
-					})
-					mockSender.EXPECT().onStreamCompleted(streamID)
-					b := make([]byte, 4)
-					n, err := strWithTimeout.Read(b)
-					Expect(err).To(MatchError(io.EOF))
-					Expect(n).To(Equal(4))
-					Expect(b).To(Equal([]byte{0xDE, 0xAD, 0xBE, 0xEF}))
-					n, err = strWithTimeout.Read(b)
-					Expect(n).To(BeZero())
-					Expect(err).To(MatchError(io.EOF))
-				})
+	now := time.Now()
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(4), true, now)
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(2), false, now)
+	require.NoError(t, str.handleStreamFrame(&wire.StreamFrame{Offset: 2, Data: []byte{0xbe, 0xef}, Fin: true}, now))
+	require.NoError(t, str.handleStreamFrame(&wire.StreamFrame{Data: []byte{0xde, 0xad}}, now))
+	mockFC.EXPECT().AddBytesRead(protocol.ByteCount(2)).Times(2)
+	mockSender.EXPECT().onStreamCompleted(protocol.StreamID(42))
 
-				It("handles out-of-order frames", func() {
-					mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(2), false)
-					mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(4), true)
-					mockFC.EXPECT().AddBytesRead(protocol.ByteCount(2)).Times(2)
-					frame1 := wire.StreamFrame{
-						Offset: 2,
-						Data:   []byte{0xBE, 0xEF},
-						Fin:    true,
-					}
-					frame2 := wire.StreamFrame{
-						Offset: 0,
-						Data:   []byte{0xDE, 0xAD},
-					}
-					err := str.handleStreamFrame(&frame1)
-					Expect(err).ToNot(HaveOccurred())
-					err = str.handleStreamFrame(&frame2)
-					Expect(err).ToNot(HaveOccurred())
-					mockSender.EXPECT().onStreamCompleted(streamID)
-					b := make([]byte, 4)
-					n, err := strWithTimeout.Read(b)
-					Expect(err).To(MatchError(io.EOF))
-					Expect(n).To(Equal(4))
-					Expect(b).To(Equal([]byte{0xDE, 0xAD, 0xBE, 0xEF}))
-					n, err = strWithTimeout.Read(b)
-					Expect(n).To(BeZero())
-					Expect(err).To(MatchError(io.EOF))
-				})
+	strWithTimeout := &readerWithTimeout{Reader: str, Timeout: time.Second}
+	b := make([]byte, 6)
+	n, err := strWithTimeout.Read(b)
+	require.ErrorIs(t, err, io.EOF)
+	require.Equal(t, 4, n)
+	require.Equal(t, []byte{0xde, 0xad, 0xbe, 0xef}, b[:n])
+	n, err = strWithTimeout.Read(b)
+	require.Zero(t, n)
+	require.ErrorIs(t, err, io.EOF)
+}
 
-				It("returns EOFs with partial read", func() {
-					mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(2), true)
-					mockFC.EXPECT().AddBytesRead(protocol.ByteCount(2))
-					err := str.handleStreamFrame(&wire.StreamFrame{
-						Offset: 0,
-						Data:   []byte{0xde, 0xad},
-						Fin:    true,
-					})
-					Expect(err).ToNot(HaveOccurred())
-					mockSender.EXPECT().onStreamCompleted(streamID)
-					b := make([]byte, 4)
-					n, err := strWithTimeout.Read(b)
-					Expect(err).To(MatchError(io.EOF))
-					Expect(n).To(Equal(2))
-					Expect(b[:n]).To(Equal([]byte{0xde, 0xad}))
-				})
+func TestReceiveStreamImmediateFINs(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
+	mockSender := NewMockStreamSender(mockCtrl)
+	str := newReceiveStream(42, mockSender, mockFC)
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(0), true, gomock.Any())
+	mockFC.EXPECT().AddBytesRead(protocol.ByteCount(0))
+	require.NoError(t, str.handleStreamFrame(&wire.StreamFrame{Fin: true}, time.Now()))
+	mockSender.EXPECT().onStreamCompleted(protocol.StreamID(42))
+	n, err := (&readerWithTimeout{Reader: str, Timeout: time.Second}).Read(make([]byte, 4))
+	require.Zero(t, n)
+	require.ErrorIs(t, err, io.EOF)
+}
 
-				It("handles immediate FINs", func() {
-					mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(0), true)
-					mockFC.EXPECT().AddBytesRead(protocol.ByteCount(0))
-					err := str.handleStreamFrame(&wire.StreamFrame{
-						Offset: 0,
-						Fin:    true,
-					})
-					Expect(err).ToNot(HaveOccurred())
-					mockSender.EXPECT().onStreamCompleted(streamID)
-					b := make([]byte, 4)
-					n, err := strWithTimeout.Read(b)
-					Expect(n).To(BeZero())
-					Expect(err).To(MatchError(io.EOF))
-				})
+func TestReceiveStreamCloseForShutdown(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
+	mockSender := NewMockStreamSender(mockCtrl)
+	str := newReceiveStream(42, mockSender, mockFC)
+	strWithTimeout := &readerWithTimeout{Reader: str, Timeout: time.Second}
 
-				// Calling Read concurrently doesn't make any sense (and is forbidden),
-				// but we still want to make sure that we don't complete the stream more than once
-				// if the user misuses our API.
-				// This would lead to an INTERNAL_ERROR ("tried to delete unknown outgoing stream"),
-				// which can be hard to debug.
-				// Note that even without the protection built into the receiveStream, this test
-				// is very timing-dependent, and would need to run a few hundred times to trigger the failure.
-				It("handles concurrent reads", func() {
-					mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(6), gomock.Any()).AnyTimes()
-					var bytesRead protocol.ByteCount
-					mockFC.EXPECT().AddBytesRead(gomock.Any()).Do(func(n protocol.ByteCount) bool {
-						bytesRead += n
-						return false
-					}).AnyTimes()
+	// Test immediate return of reads
+	errChan := make(chan error, 1)
+	go func() {
+		_, err := strWithTimeout.Read([]byte{0})
+		errChan <- err
+	}()
 
-					var numCompleted int32
-					mockSender.EXPECT().onStreamCompleted(streamID).Do(func(protocol.StreamID) {
-						atomic.AddInt32(&numCompleted, 1)
-					}).AnyTimes()
-					const num = 3
-					var wg sync.WaitGroup
-					wg.Add(num)
-					for i := 0; i < num; i++ {
-						go func() {
-							defer wg.Done()
-							defer GinkgoRecover()
-							_, err := str.Read(make([]byte, 8))
-							Expect(err).To(MatchError(io.EOF))
-						}()
-					}
-					str.handleStreamFrame(&wire.StreamFrame{
-						Offset: 0,
-						Data:   []byte("foobar"),
-						Fin:    true,
-					})
-					wg.Wait()
-					Expect(bytesRead).To(BeEquivalentTo(6))
-					Expect(atomic.LoadInt32(&numCompleted)).To(BeEquivalentTo(1))
-				})
-			})
-		})
+	select {
+	case err := <-errChan:
+		t.Fatalf("read returned before closeForShutdown: %v", err)
+	case <-time.After(scaleDuration(5 * time.Millisecond)): // short wait to ensure read is blocked
+	}
 
-		Context("closing for shutdown", func() {
-			testErr := errors.New("test error")
+	str.closeForShutdown(assert.AnError)
+	select {
+	case err := <-errChan:
+		require.ErrorIs(t, err, assert.AnError)
+	case <-time.After(time.Second):
+		t.Fatal("read did not return after closeForShutdown")
+	}
 
-			It("immediately returns all reads", func() {
-				done := make(chan struct{})
-				b := make([]byte, 4)
-				go func() {
-					defer GinkgoRecover()
-					n, err := strWithTimeout.Read(b)
-					Expect(n).To(BeZero())
-					Expect(err).To(MatchError(testErr))
-					close(done)
-				}()
-				Consistently(done).ShouldNot(BeClosed())
-				str.closeForShutdown(testErr)
-				Eventually(done).Should(BeClosed())
-			})
+	// following calls to Read should return the error
+	n, err := strWithTimeout.Read([]byte{0})
+	require.Zero(t, n)
+	require.ErrorIs(t, err, assert.AnError)
 
-			It("errors for all following reads", func() {
-				str.closeForShutdown(testErr)
-				b := make([]byte, 1)
-				n, err := strWithTimeout.Read(b)
-				Expect(n).To(BeZero())
-				Expect(err).To(MatchError(testErr))
-			})
-		})
+	// receiving a RESET_STREAM frame after closeForShutdown does nothing
+	require.NoError(t, str.handleResetStreamFrame(&wire.ResetStreamFrame{StreamID: 42, ErrorCode: 1234, FinalSize: 42}, time.Now()))
+	n, err = strWithTimeout.Read([]byte{0})
+	require.Zero(t, n)
+	require.ErrorIs(t, err, assert.AnError)
+
+	// calling CancelRead after closeForShutdown does nothing
+	str.CancelRead(1234)
+	n, err = strWithTimeout.Read([]byte{0})
+	require.Zero(t, n)
+	require.ErrorIs(t, err, assert.AnError)
+}
+
+func TestReceiveStreamCancellation(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
+	mockSender := NewMockStreamSender(mockCtrl)
+	str := newReceiveStream(42, mockSender, mockFC)
+	strWithTimeout := &readerWithTimeout{Reader: str, Timeout: time.Second}
+
+	mockSender.EXPECT().onHasStreamControlFrame(str.StreamID(), gomock.Any())
+	errChan := make(chan error, 1)
+	go func() {
+		_, err := strWithTimeout.Read([]byte{0})
+		errChan <- err
+	}()
+
+	select {
+	case err := <-errChan:
+		t.Fatalf("read returned before CancelRead: %v", err)
+	case <-time.After(scaleDuration(5 * time.Millisecond)):
+	}
+
+	str.CancelRead(1234)
+	// this queues a STOP_SENDING frame
+	f, ok, hasMore := str.getControlFrame(time.Now())
+	require.True(t, ok)
+	require.Equal(t, &wire.StopSendingFrame{StreamID: 42, ErrorCode: 1234}, f.Frame)
+	require.False(t, hasMore)
+	require.True(t, mockCtrl.Satisfied())
+
+	select {
+	case err := <-errChan:
+		var streamErr *StreamError
+		require.ErrorAs(t, err, &streamErr)
+		require.Equal(t, StreamError{StreamID: 42, ErrorCode: 1234, Remote: false}, *streamErr)
+	case <-time.After(time.Second):
+		t.Fatal("Read was not unblocked")
+	}
+
+	// further Read calls return the error
+	n, err := strWithTimeout.Read([]byte{0})
+	require.Zero(t, n)
+	require.ErrorIs(t, err, &StreamError{StreamID: 42, ErrorCode: 1234, Remote: false})
+
+	// calling CancelRead again does nothing
+	// especially:
+	// 1. no more calls to onHasStreamControlFrame
+	// 2. no changes of the error code returned by Read
+	str.CancelRead(1234)
+	str.CancelRead(4321)
+	n, err = strWithTimeout.Read([]byte{0})
+	require.Zero(t, n)
+	// error code unchanged
+	require.ErrorIs(t, err, &StreamError{StreamID: 42, ErrorCode: 1234, Remote: false})
+	require.True(t, mockCtrl.Satisfied())
+
+	// receiving the FIN bit has no effect
+	mockFC.EXPECT().Abandon()
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(6), true, gomock.Any()).Times(2)
+	mockSender.EXPECT().onStreamCompleted(protocol.StreamID(42))
+	// receive two of them, to make sure onStreamCompleted is not called twice
+	require.NoError(t, str.handleStreamFrame(&wire.StreamFrame{Data: []byte("foobar"), Fin: true}, time.Now()))
+	require.NoError(t, str.handleStreamFrame(&wire.StreamFrame{Data: []byte("foobar"), Fin: true}, time.Now()))
+	require.True(t, mockCtrl.Satisfied())
+
+	// receiving a RESET_STREAM frame after CancelRead has no effect
+	mockFC.EXPECT().Abandon()
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(42), true, gomock.Any())
+	require.NoError(t, str.handleResetStreamFrame(&wire.ResetStreamFrame{StreamID: 42, ErrorCode: 4321, FinalSize: 42}, time.Now()))
+	n, err = strWithTimeout.Read([]byte{0})
+	require.Zero(t, n)
+	require.ErrorIs(t, err, &StreamError{StreamID: 42, ErrorCode: 1234, Remote: false})
+}
+
+func TestReceiveStreamCancelReadAfterFIN(t *testing.T) {
+	t.Run("FIN not read", func(t *testing.T) {
+		testReceiveStreamCancelReadAfterFIN(t, false)
 	})
-
-	Context("stream cancellations", func() {
-		Context("canceling read", func() {
-			It("unblocks Read", func() {
-				mockSender.EXPECT().onHasStreamControlFrame(gomock.Any(), gomock.Any())
-				done := make(chan struct{})
-				go func() {
-					defer GinkgoRecover()
-					_, err := strWithTimeout.Read([]byte{0})
-					Expect(err).To(Equal(&StreamError{
-						StreamID:  streamID,
-						ErrorCode: 1234,
-						Remote:    false,
-					}))
-					close(done)
-				}()
-				Consistently(done).ShouldNot(BeClosed())
-				str.CancelRead(1234)
-				Eventually(done).Should(BeClosed())
-			})
-
-			It("doesn't allow further calls to Read", func() {
-				mockSender.EXPECT().onHasStreamControlFrame(gomock.Any(), gomock.Any())
-				str.CancelRead(1234)
-				_, err := strWithTimeout.Read([]byte{0})
-				Expect(err).To(Equal(&StreamError{
-					StreamID:  streamID,
-					ErrorCode: 1234,
-					Remote:    false,
-				}))
-			})
-
-			It("does nothing when CancelRead is called twice", func() {
-				mockSender.EXPECT().onHasStreamControlFrame(gomock.Any(), gomock.Any())
-				str.CancelRead(1234)
-				str.CancelRead(1234)
-				_, err := strWithTimeout.Read([]byte{0})
-				Expect(err).To(Equal(&StreamError{
-					StreamID:  streamID,
-					ErrorCode: 1234,
-					Remote:    false,
-				}))
-			})
-
-			It("queues a STOP_SENDING frame", func() {
-				mockSender.EXPECT().onHasStreamControlFrame(gomock.Any(), gomock.Any())
-				str.CancelRead(1234)
-				f, ok, hasMore := str.getControlFrame()
-				Expect(ok).To(BeTrue())
-				Expect(f.Frame).To(Equal(&wire.StopSendingFrame{
-					StreamID:  streamID,
-					ErrorCode: 1234,
-				}))
-				Expect(hasMore).To(BeFalse())
-			})
-
-			It("doesn't send a STOP_SENDING frame, if the FIN was already read", func() {
-				mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(6), true)
-				mockFC.EXPECT().AddBytesRead(protocol.ByteCount(6))
-				// no calls to mockSender.queueControlFrame
-				Expect(str.handleStreamFrame(&wire.StreamFrame{
-					StreamID: streamID,
-					Data:     []byte("foobar"),
-					Fin:      true,
-				})).To(Succeed())
-				mockSender.EXPECT().onStreamCompleted(streamID)
-				n, err := strWithTimeout.Read(make([]byte, 100))
-				Expect(err).To(MatchError(io.EOF))
-				Expect(n).To(Equal(6))
-				str.CancelRead(1234)
-			})
-
-			It("doesn't send a STOP_SENDING frame, if the stream was already reset", func() {
-				mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(42), true)
-				mockFC.EXPECT().Abandon().MinTimes(1)
-				Expect(str.handleResetStreamFrame(&wire.ResetStreamFrame{
-					ErrorCode: 1337,
-					StreamID:  streamID,
-					FinalSize: 42,
-				})).To(Succeed())
-				mockSender.EXPECT().onStreamCompleted(gomock.Any())
-				str.CancelRead(1234)
-				// check that the error indicates a remote reset
-				n, err := str.Read([]byte{0})
-				Expect(err).To(HaveOccurred())
-				Expect(n).To(BeZero())
-				var streamErr *StreamError
-				Expect(errors.As(err, &streamErr)).To(BeTrue())
-				Expect(streamErr.ErrorCode).To(BeEquivalentTo(1337))
-				Expect(streamErr.Remote).To(BeTrue())
-			})
-
-			It("sends a STOP_SENDING after receiving the final offset", func() {
-				mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(6), true)
-				Expect(str.handleStreamFrame(&wire.StreamFrame{
-					Data: []byte("foobar"),
-					Fin:  true,
-				})).To(Succeed())
-				mockFC.EXPECT().Abandon()
-				mockSender.EXPECT().onHasStreamControlFrame(gomock.Any(), gomock.Any())
-				mockSender.EXPECT().onStreamCompleted(streamID)
-				str.CancelRead(1234)
-				// read the error
-				n, err := str.Read([]byte{0})
-				Expect(err).To(HaveOccurred())
-				Expect(n).To(BeZero())
-			})
-
-			It("completes the stream when receiving the Fin after the stream was canceled", func() {
-				mockSender.EXPECT().onHasStreamControlFrame(gomock.Any(), gomock.Any())
-				str.CancelRead(1234)
-				gomock.InOrder(
-					mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(1000), true),
-					mockFC.EXPECT().Abandon(),
-				)
-				mockSender.EXPECT().onStreamCompleted(streamID)
-				Expect(str.handleStreamFrame(&wire.StreamFrame{
-					Offset: 1000,
-					Fin:    true,
-				})).To(Succeed())
-			})
-
-			It("handles duplicate FinBits after the stream was canceled", func() {
-				mockSender.EXPECT().onHasStreamControlFrame(gomock.Any(), gomock.Any())
-				str.CancelRead(1234)
-				gomock.InOrder(
-					mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(1000), true),
-					mockFC.EXPECT().Abandon(),
-					mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(1000), true),
-				)
-				mockSender.EXPECT().onStreamCompleted(streamID)
-				Expect(str.handleStreamFrame(&wire.StreamFrame{
-					Offset: 1000,
-					Fin:    true,
-				})).To(Succeed())
-				Expect(str.handleStreamFrame(&wire.StreamFrame{
-					Offset: 1000,
-					Fin:    true,
-				})).To(Succeed())
-			})
-
-			It("ignores cancellations after closeForShutdown", func() {
-				closeErr := errors.New("closed for shutdown")
-				str.closeForShutdown(closeErr)
-				buf := make([]byte, 100)
-				_, err := str.Read(buf)
-				Expect(err).To(Equal(closeErr))
-				str.CancelRead(42)
-				_, err = str.Read(buf)
-				Expect(err).To(Equal(closeErr))
-			})
-		})
-
-		Context("receiving RESET_STREAM frames", func() {
-			rst := &wire.ResetStreamFrame{
-				StreamID:  streamID,
-				FinalSize: 42,
-				ErrorCode: 1234,
-			}
-
-			It("unblocks Read", func() {
-				done := make(chan struct{})
-				go func() {
-					defer GinkgoRecover()
-					_, err := strWithTimeout.Read([]byte{0})
-					Expect(err).To(Equal(&StreamError{
-						StreamID:  streamID,
-						ErrorCode: 1234,
-						Remote:    true,
-					}))
-					close(done)
-				}()
-				Consistently(done).ShouldNot(BeClosed())
-				mockSender.EXPECT().onStreamCompleted(streamID)
-				gomock.InOrder(
-					mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(42), true),
-					mockFC.EXPECT().Abandon(),
-				)
-				Expect(str.handleResetStreamFrame(rst)).To(Succeed())
-				Eventually(done).Should(BeClosed())
-			})
-
-			It("doesn't allow further calls to Read", func() {
-				mockSender.EXPECT().onStreamCompleted(streamID)
-				gomock.InOrder(
-					mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(42), true),
-					mockFC.EXPECT().Abandon(),
-				)
-				Expect(str.handleResetStreamFrame(rst)).To(Succeed())
-				_, err := strWithTimeout.Read([]byte{0})
-				Expect(err).To(MatchError(&StreamError{
-					StreamID:  streamID,
-					ErrorCode: 1234,
-				}))
-			})
-
-			It("errors when receiving a RESET_STREAM with an inconsistent offset", func() {
-				testErr := errors.New("already received a different final offset before")
-				mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(42), true).Return(testErr)
-				err := str.handleResetStreamFrame(rst)
-				Expect(err).To(MatchError(testErr))
-			})
-
-			It("ignores duplicate RESET_STREAM frames", func() {
-				mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(42), true).Times(2)
-				mockFC.EXPECT().Abandon()
-				Expect(str.handleResetStreamFrame(rst)).To(Succeed())
-				Expect(str.handleResetStreamFrame(rst)).To(Succeed())
-			})
-
-			It("doesn't call onStreamCompleted again when the final offset was already received via Fin", func() {
-				mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(42), true).Times(2)
-				Expect(str.handleStreamFrame(&wire.StreamFrame{
-					StreamID: streamID,
-					Offset:   rst.FinalSize,
-					Fin:      true,
-				})).To(Succeed())
-				mockFC.EXPECT().Abandon().MinTimes(1)
-				mockSender.EXPECT().onStreamCompleted(streamID)
-				Expect(str.handleResetStreamFrame(rst)).To(Succeed())
-				// now read the error
-				n, err := str.Read([]byte{0})
-				Expect(err).To(HaveOccurred())
-				Expect(n).To(BeZero())
-			})
-
-			It("doesn't do anything when it was closed for shutdown", func() {
-				str.closeForShutdown(errors.New("shutdown"))
-				err := str.handleResetStreamFrame(rst)
-				Expect(err).ToNot(HaveOccurred())
-			})
-
-			It("handles RESET_STREAM after CancelRead", func() {
-				mockFC.EXPECT().Abandon()
-				mockSender.EXPECT().onHasStreamControlFrame(gomock.Any(), gomock.Any())
-				str.CancelRead(1234)
-				mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(42), true)
-				mockSender.EXPECT().onStreamCompleted(streamID)
-				Expect(str.handleResetStreamFrame(rst)).To(Succeed())
-				// check that the error indicates a local reset
-				n, err := str.Read([]byte{0})
-				Expect(err).To(HaveOccurred())
-				Expect(n).To(BeZero())
-				var streamErr *StreamError
-				Expect(errors.As(err, &streamErr)).To(BeTrue())
-				Expect(streamErr.Remote).To(BeFalse())
-			})
-		})
+	t.Run("FIN read", func(t *testing.T) {
+		testReceiveStreamCancelReadAfterFIN(t, true)
 	})
+}
 
-	It("errors when a STREAM frame causes a flow control violation", func() {
-		testErr := errors.New("flow control violation")
-		mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(8), false).Return(testErr)
-		frame := wire.StreamFrame{
-			Offset: 2,
-			Data:   []byte("foobar"),
+func testReceiveStreamCancelReadAfterFIN(t *testing.T, finRead bool) {
+	mockCtrl := gomock.NewController(t)
+	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
+	mockSender := NewMockStreamSender(mockCtrl)
+	str := newReceiveStream(42, mockSender, mockFC)
+
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(6), true, gomock.Any())
+	mockSender.EXPECT().onStreamCompleted(protocol.StreamID(42))
+	require.NoError(t, str.handleStreamFrame(&wire.StreamFrame{Data: []byte("foobar"), Fin: true}, time.Now()))
+	if finRead {
+		mockFC.EXPECT().AddBytesRead(protocol.ByteCount(6))
+		n, err := str.Read(make([]byte, 10))
+		require.ErrorIs(t, err, io.EOF)
+		require.Equal(t, 6, n)
+	}
+
+	// if the FIN was received, but not read yet, a STOP_SENDING frame is queued
+	if !finRead {
+		mockFC.EXPECT().Abandon()
+		mockSender.EXPECT().onHasStreamControlFrame(str.StreamID(), str)
+	}
+	str.CancelRead(1337)
+	f, ok, hasMore := str.getControlFrame(time.Now())
+	// if the EOF was already read, no STOP_SENDING frame is queued
+	if finRead {
+		require.False(t, ok)
+		require.False(t, hasMore)
+	} else {
+		require.True(t, ok)
+		require.Equal(t, &wire.StopSendingFrame{StreamID: 42, ErrorCode: 1337}, f.Frame)
+		require.False(t, hasMore)
+	}
+
+	// Read returns the error
+	n, err := str.Read([]byte{0})
+	require.Zero(t, n)
+	if finRead {
+		require.ErrorIs(t, err, io.EOF)
+	} else {
+		require.ErrorIs(t, err, &StreamError{StreamID: 42, ErrorCode: 1337, Remote: false})
+	}
+}
+
+func TestReceiveStreamReset(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
+	mockSender := NewMockStreamSender(mockCtrl)
+	str := newReceiveStream(42, mockSender, mockFC)
+	strWithTimeout := &readerWithTimeout{Reader: str, Timeout: time.Second}
+
+	errChan := make(chan error, 1)
+	go func() {
+		_, err := strWithTimeout.Read([]byte{0})
+		errChan <- err
+	}()
+
+	select {
+	case err := <-errChan:
+		t.Fatalf("read returned before reset: %v", err)
+	case <-time.After(scaleDuration(5 * time.Millisecond)):
+	}
+
+	mockSender.EXPECT().onStreamCompleted(protocol.StreamID(42))
+	gomock.InOrder(
+		mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(42), true, gomock.Any()),
+		mockFC.EXPECT().Abandon().MinTimes(1),
+	)
+	require.NoError(t, str.handleResetStreamFrame(
+		&wire.ResetStreamFrame{StreamID: 42, ErrorCode: 1234, FinalSize: 42},
+		time.Now(),
+	))
+
+	select {
+	case err := <-errChan:
+		require.ErrorIs(t, err, &StreamError{StreamID: 42, ErrorCode: 1234, Remote: true})
+	case <-time.After(time.Second):
+		t.Fatal("Read was not unblocked")
+	}
+
+	// Test that further calls to Read return the error
+	_, err := strWithTimeout.Read([]byte{0})
+	require.Equal(t, &StreamError{StreamID: 42, ErrorCode: 1234, Remote: true}, err)
+
+	// further RESET_STREAM frames have no effect
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(42), true, gomock.Any())
+	require.NoError(t, str.handleResetStreamFrame(
+		&wire.ResetStreamFrame{StreamID: 42, ErrorCode: 4321, FinalSize: 42},
+		time.Now(),
+	))
+	n, err := str.Read([]byte{0})
+	require.Zero(t, n)
+	// error code unchanged
+	require.ErrorIs(t, err, &StreamError{StreamID: 42, ErrorCode: 1234, Remote: true})
+
+	// CancelRead after a RESET_STREAM frame has no effect
+	str.CancelRead(100)
+	n, err = str.Read([]byte{0})
+	require.Zero(t, n)
+	// error code and remote flag unchanged
+	require.ErrorIs(t, err, &StreamError{StreamID: 42, ErrorCode: 1234, Remote: true})
+}
+
+func TestReceiveStreamResetAfterFINRead(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
+	mockSender := NewMockStreamSender(mockCtrl)
+	str := newReceiveStream(42, mockSender, mockFC)
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(6), true, gomock.Any())
+	mockSender.EXPECT().onStreamCompleted(protocol.StreamID(42))
+	require.NoError(t, str.handleStreamFrame(
+		&wire.StreamFrame{StreamID: 42, Data: []byte("foobar"), Fin: true},
+		time.Now(),
+	))
+	mockFC.EXPECT().AddBytesRead(protocol.ByteCount(6))
+	n, err := str.Read(make([]byte, 6))
+	require.Equal(t, 6, n)
+	require.ErrorIs(t, err, io.EOF)
+	// make sure that onStreamCompleted was called due to the EOF
+	require.True(t, mockCtrl.Satisfied())
+
+	// Now receive a RESET_STREAM frame.
+	// We don't expect any more calls to onStreamCompleted.
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(6), true, gomock.Any())
+	mockFC.EXPECT().Abandon()
+	require.NoError(t, str.handleResetStreamFrame(
+		&wire.ResetStreamFrame{StreamID: 42, ErrorCode: 1234, FinalSize: 6},
+		time.Now(),
+	))
+	// now read the error
+	n, err = str.Read([]byte{0})
+	require.Error(t, err)
+	require.Zero(t, n)
+}
+
+// Calling Read concurrently doesn't make any sense (and is forbidden),
+// but we still want to make sure that we don't complete the stream more than once
+// if the user misuses our API.
+// This would lead to an INTERNAL_ERROR ("tried to delete unknown outgoing stream"),
+// which can be hard to debug.
+// Note that even without the protection built into the receiveStream, this test
+// is very timing-dependent, and would need to run a few hundred times to trigger the failure.
+func TestReceiveStreamConcurrentReads(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
+	mockSender := NewMockStreamSender(mockCtrl)
+	str := newReceiveStream(42, mockSender, mockFC)
+
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(6), gomock.Any(), gomock.Any()).AnyTimes()
+	var bytesRead protocol.ByteCount
+	mockFC.EXPECT().AddBytesRead(gomock.Any()).Do(func(n protocol.ByteCount) (bool, bool) {
+		bytesRead += n
+		return false, false
+	}).AnyTimes()
+
+	var numCompleted atomic.Int32
+	mockSender.EXPECT().onStreamCompleted(protocol.StreamID(42)).Do(func(protocol.StreamID) {
+		numCompleted.Add(1)
+	}).AnyTimes()
+
+	const num = 3
+	errChan := make(chan error, num)
+	for range num {
+		go func() {
+			_, err := str.Read(make([]byte, 8))
+			errChan <- err
+		}()
+	}
+	require.NoError(t, str.handleStreamFrame(&wire.StreamFrame{Data: []byte("foobar"), Fin: true}, time.Now()))
+	for range num {
+		select {
+		case err := <-errChan:
+			require.ErrorIs(t, err, io.EOF)
+		case <-time.After(time.Second):
+			t.Fatal("timeout")
 		}
-		err := str.handleStreamFrame(&frame)
-		Expect(err).To(MatchError(testErr))
-	})
-})
+	}
+	require.Equal(t, protocol.ByteCount(6), bytesRead)
+	require.Equal(t, int32(1), numCompleted.Load())
+}
+
+func TestReceiveStreamResetStreamAtBeforeReadOffset(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
+	mockSender := NewMockStreamSender(mockCtrl)
+	str := newReceiveStream(42, mockSender, mockFC)
+
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(6), false, gomock.Any())
+	require.NoError(t, str.handleStreamFrame(&wire.StreamFrame{Data: []byte("foobar")}, time.Now()))
+	mockFC.EXPECT().AddBytesRead(protocol.ByteCount(3))
+	b := make([]byte, 3)
+	n, err := str.Read(b)
+	require.NoError(t, err)
+	require.Equal(t, 3, n)
+	require.Equal(t, []byte("foo"), b)
+
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(10), true, gomock.Any())
+	mockFC.EXPECT().Abandon()
+	str.handleResetStreamFrame(&wire.ResetStreamFrame{StreamID: 42, ErrorCode: 1337, FinalSize: 10, ReliableSize: 3}, time.Now())
+	require.True(t, mockCtrl.Satisfied())
+
+	// Read returns the error
+	mockSender.EXPECT().onStreamCompleted(protocol.StreamID(42))
+	n, err = str.Read([]byte{0})
+	require.ErrorIs(t, err, &StreamError{StreamID: 42, ErrorCode: 1337, Remote: true})
+	require.Zero(t, n)
+}
+
+func TestReceiveStreamResetStreamAtAfterReadOffset(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
+	mockSender := NewMockStreamSender(mockCtrl)
+	str := newReceiveStream(42, mockSender, mockFC)
+
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(6), false, gomock.Any())
+	require.NoError(t, str.handleStreamFrame(&wire.StreamFrame{Data: []byte("foobar")}, time.Now()))
+	mockFC.EXPECT().AddBytesRead(protocol.ByteCount(2))
+	b := make([]byte, 2)
+	n, err := str.Read(b)
+	require.NoError(t, err)
+	require.Equal(t, 2, n)
+	require.Equal(t, []byte("fo"), b)
+
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(10), true, gomock.Any())
+	str.handleResetStreamFrame(&wire.ResetStreamFrame{StreamID: 42, ErrorCode: 1337, FinalSize: 10, ReliableSize: 6}, time.Now())
+	require.True(t, mockCtrl.Satisfied())
+
+	// Read returns the error
+	mockFC.EXPECT().AddBytesRead(protocol.ByteCount(2))
+	n, err = str.Read(b)
+	require.NoError(t, err)
+	require.Equal(t, 2, n)
+	require.Equal(t, []byte("ob"), b)
+	require.True(t, mockCtrl.Satisfied())
+
+	gomock.InOrder(
+		mockFC.EXPECT().AddBytesRead(protocol.ByteCount(2)),
+		mockFC.EXPECT().Abandon(),
+	)
+	mockSender.EXPECT().onStreamCompleted(protocol.StreamID(42))
+	n, err = str.Read(b)
+	require.ErrorIs(t, err, &StreamError{StreamID: 42, ErrorCode: 1337, Remote: true})
+	require.Equal(t, 2, n)
+	require.Equal(t, []byte("ar"), b)
+}
+
+func TestReceiveStreamMultipleResetStreamAt(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
+	mockSender := NewMockStreamSender(mockCtrl)
+	str := newReceiveStream(42, mockSender, mockFC)
+
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(6), false, gomock.Any())
+	require.NoError(t, str.handleStreamFrame(&wire.StreamFrame{Data: []byte("foobar")}, time.Now()))
+
+	mockFC.EXPECT().AddBytesRead(protocol.ByteCount(3))
+	b := make([]byte, 3)
+	n, err := str.Read(b)
+	require.NoError(t, err)
+	require.Equal(t, 3, n)
+	require.Equal(t, []byte("foo"), b)
+	require.True(t, mockCtrl.Satisfied())
+
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(10), true, gomock.Any())
+	str.handleResetStreamFrame(&wire.ResetStreamFrame{StreamID: 42, ErrorCode: 1337, FinalSize: 10, ReliableSize: 6}, time.Now())
+	require.True(t, mockCtrl.Satisfied())
+
+	// receiving a reordered RESET_STREAM_AT frame has no effect
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(10), true, gomock.Any())
+	str.handleResetStreamFrame(&wire.ResetStreamFrame{StreamID: 42, ErrorCode: 1337, FinalSize: 10, ReliableSize: 8}, time.Now())
+	require.True(t, mockCtrl.Satisfied())
+
+	// receiving a RESET_STREAM_AT frame with a smaller reliable size is valid
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(10), true, gomock.Any())
+	mockFC.EXPECT().Abandon()
+	str.handleResetStreamFrame(&wire.ResetStreamFrame{StreamID: 42, ErrorCode: 1337, FinalSize: 10, ReliableSize: 3}, time.Now())
+
+	// Read returns the error
+	mockSender.EXPECT().onStreamCompleted(protocol.StreamID(42))
+	n, err = str.Read(b)
+	require.ErrorIs(t, err, &StreamError{StreamID: 42, ErrorCode: 1337, Remote: true})
+	require.Zero(t, n)
+}
+
+func TestReceiveStreamResetStreamAtAfterResetStream(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
+	mockSender := NewMockStreamSender(mockCtrl)
+	str := newReceiveStream(42, mockSender, mockFC)
+
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(6), false, gomock.Any())
+	require.NoError(t, str.handleStreamFrame(&wire.StreamFrame{Data: []byte("foobar")}, time.Now()))
+
+	mockFC.EXPECT().AddBytesRead(protocol.ByteCount(3))
+	b := make([]byte, 3)
+	n, err := str.Read(b)
+	require.NoError(t, err)
+	require.Equal(t, 3, n)
+	require.Equal(t, []byte("foo"), b)
+	require.True(t, mockCtrl.Satisfied())
+
+	mockFC.EXPECT().Abandon()
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(10), true, gomock.Any())
+	str.handleResetStreamFrame(&wire.ResetStreamFrame{StreamID: 42, ErrorCode: 1337, FinalSize: 10}, time.Now())
+	require.True(t, mockCtrl.Satisfied())
+
+	// receiving a reordered RESET_STREAM_AT frame has no effect
+	mockFC.EXPECT().Abandon()
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(10), true, gomock.Any())
+	str.handleResetStreamFrame(&wire.ResetStreamFrame{StreamID: 42, ErrorCode: 1337, FinalSize: 10, ReliableSize: 8}, time.Now())
+	require.True(t, mockCtrl.Satisfied())
+
+	// Read returns the error
+	mockSender.EXPECT().onStreamCompleted(protocol.StreamID(42))
+	n, err = str.Read(b)
+	require.ErrorIs(t, err, &StreamError{StreamID: 42, ErrorCode: 1337, Remote: true})
+	require.Zero(t, n)
+}
