@@ -127,6 +127,7 @@ func populateConfig(config *Config) *Config {
 		Tracer:                         config.Tracer,
 		CcType:                         config.CcType,
 		DisablePnSkips:                 config.DisablePnSkips,
+		SendTimestamps:                 config.SendTimestamps,
 	}
 }
 

@@ -135,6 +135,8 @@ type packetPacker struct {
 	rand                rand.Rand
 
 	numNonAckElicitingAcks int
+
+	sendTimestamps bool
 }
 
 var _ packer = &packetPacker{}
@@ -150,6 +152,7 @@ func newPacketPacker(
 	acks ackFrameSource,
 	datagramQueue *datagramQueue,
 	perspective protocol.Perspective,
+	sendTimestamps bool,
 ) *packetPacker {
 	var b [8]byte
 	_, _ = crand.Read(b[:])
@@ -167,6 +170,7 @@ func newPacketPacker(
 		acks:                acks,
 		rand:                *rand.New(rand.NewSource(binary.BigEndian.Uint64(b[:]))),
 		pnManager:           packetNumberManager,
+		sendTimestamps:      sendTimestamps,
 	}
 }
 
@@ -588,11 +592,15 @@ func (p *packetPacker) composeNextPacket(maxFrameSize protocol.ByteCount, onlyAc
 	tsLen := tsframe.Length(v)
 	tsAdded := false
 
+	print("Sent timestamps?", p.sendTimestamps)
+
 	if onlyAck {
 		if ack := p.acks.GetAckFrame(protocol.Encryption1RTT, true); ack != nil {
 			pl := payload{ack: ack, length: ack.Length(v)}
-			pl.frames = append(pl.frames, ackhandler.Frame{Frame: &tsframe})
-			pl.length += tsLen
+			if p.sendTimestamps {
+				pl.frames = append(pl.frames, ackhandler.Frame{Frame: &tsframe})
+				pl.length += tsLen
+			}
 			return pl
 		}
 		return payload{}
@@ -619,9 +627,11 @@ func (p *packetPacker) composeNextPacket(maxFrameSize protocol.ByteCount, onlyAc
 				pl.length += size
 				p.datagramQueue.Pop()
 
-				pl.frames = append(pl.frames, ackhandler.Frame{Frame: &tsframe})
-				pl.length += tsLen
-				tsAdded = true
+				if p.sendTimestamps {
+					pl.frames = append(pl.frames, ackhandler.Frame{Frame: &tsframe})
+					pl.length += tsLen
+					tsAdded = true
+				}
 
 			} else if !hasAck {
 				// The DATAGRAM frame doesn't fit, and the packet doesn't contain an ACK.
@@ -634,7 +644,7 @@ func (p *packetPacker) composeNextPacket(maxFrameSize protocol.ByteCount, onlyAc
 	}
 
 	if hasAck && !hasData && !hasRetransmission {
-		if !tsAdded {
+		if p.sendTimestamps && !tsAdded {
 			pl.frames = append(pl.frames, ackhandler.Frame{Frame: &tsframe})
 			pl.length += tsLen
 		}
@@ -662,7 +672,7 @@ func (p *packetPacker) composeNextPacket(maxFrameSize protocol.ByteCount, onlyAc
 		pl.frames, lengthAdded = p.framer.AppendControlFrames(pl.frames, maxFrameSize-pl.length, v)
 		pl.length += lengthAdded
 
-		if !tsAdded && pl.length+tsLen <= maxFrameSize-pl.length {
+		if p.sendTimestamps && !tsAdded && pl.length+tsLen <= maxFrameSize-pl.length {
 			pl.frames = append(pl.frames, ackhandler.Frame{Frame: &tsframe})
 			pl.length += tsLen
 		}

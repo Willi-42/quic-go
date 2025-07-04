@@ -352,8 +352,11 @@ type Config struct {
 	EnableDatagrams bool
 	Tracer          func(context.Context, logging.Perspective, ConnectionID) *logging.ConnectionTracer
 	// What CC to use: Reno, none or pacer only
-	CcType         CCType
+	CcType CCType
+	// Disables the packet number skipping of quic. Use with care.
 	DisablePnSkips bool
+	// Send timestamp frame with each packet.
+	SendTimestamps bool
 }
 
 // ClientHelloInfo contains information about an incoming connection attempt.
