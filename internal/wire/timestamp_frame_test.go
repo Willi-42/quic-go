@@ -2,42 +2,38 @@ package wire
 
 import (
 	"bytes"
+	"testing"
 
 	"github.com/quic-go/quic-go/internal/protocol"
 	"github.com/quic-go/quic-go/quicvarint"
-
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
+	"github.com/stretchr/testify/require"
 )
 
-var _ = Describe("Timestamp Frame", func() {
-	Context("parsing", func() {
-		It("parses a timestamp frame", func() {
-			var data []byte
-			// data = append(data, timestampFrameType)       // type
-			data = append(data, encodeVarInt(1234567)...) // timestamp
+func TestParseTimestampFrame(t *testing.T) {
 
-			frame, l, err := parseTimestampFrame(data, protocol.Version1)
-			Expect(err).To(Succeed())
-			Expect(frame.Timestamp).To(Equal(uint64(1234567)))
-			Expect(l).To(Equal(len(data)))
-		})
+	var data []byte
+	// data = append(data, timestampFrameType)       // type
+	data = append(data, encodeVarInt(1234567)...) // timestamp
+	frame, l, err := parseTimestampFrame(data, protocol.Version1)
 
-		It("append and parses a timestamp frame", func() {
-			f := TimestampFrame{Timestamp: uint64(424242)}
+	require.NoError(t, err)
 
-			data, err := f.Append(nil, protocol.Version1)
-			Expect(err).ToNot(HaveOccurred())
+	require.Equal(t, frame.Timestamp, uint64(1234567))
+	require.Equal(t, len(data), l)
+}
 
-			r := bytes.NewReader(data)
-			typ, err := quicvarint.Read(r)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(typ).To(Equal(uint64(timestampFrameType)))
+func TestAppendAndParseTimestampFrame(t *testing.T) {
+	f := TimestampFrame{Timestamp: uint64(424242)}
 
-			Expect(err).ToNot(HaveOccurred())
-			expected := []byte{timestampFrameType}
-			expected = append(expected, encodeVarInt(uint64(424242))...)
-			Expect(data).To(Equal(expected))
-		})
-	})
-})
+	data, err := f.Append(nil, protocol.Version1)
+	require.NoError(t, err)
+
+	r := bytes.NewReader(data)
+	typ, err := quicvarint.Read(r)
+	require.NoError(t, err)
+	require.Equal(t, typ, uint64(timestampFrameType))
+
+	expected := []byte{timestampFrameType}
+	expected = append(expected, encodeVarInt(uint64(424242))...)
+	require.Equal(t, data, expected)
+}
