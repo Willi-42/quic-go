@@ -642,8 +642,6 @@ func (p *packetPacker) composeNextPacket(
 	tsLen := tsframe.Length(v)
 	tsAdded := false
 
-	print("Sent timestamps?", p.sendTimestamps)
-
 	if onlyAck {
 		if ack := p.acks.GetAckFrame(protocol.Encryption1RTT, now, true); ack != nil {
 			pl := payload{ack: ack, length: ack.Length(v)}
