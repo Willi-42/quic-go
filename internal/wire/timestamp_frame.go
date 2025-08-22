@@ -26,7 +26,7 @@ func parseTimestampFrame(b []byte, _ protocol.Version) (*TimestampFrame, int, er
 
 // Append appends an timestamp frame.
 func (f *TimestampFrame) Append(b []byte, _ protocol.Version) ([]byte, error) {
-	b = append(b, timestampFrameType)
+	b = quicvarint.Append(b, uint64(FrameTypeTimestamp))
 	b = quicvarint.Append(b, f.Timestamp)
 
 	return b, nil

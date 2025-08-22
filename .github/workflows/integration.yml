@@ -6,21 +6,21 @@ jobs:
       fail-fast: false
       matrix:
         os: [ "ubuntu" ]
-        go: [ "1.23.x", "1.24.x", "1.25.0-rc.1" ]
+        go: [ "1.24.x", "1.25.x" ]
         race: [ false ]
         use32bit: [ false ]
         include:
           - os: "ubuntu"
-            go: "1.24.x"
+            go: "1.25.x"
             race: true
           - os: "ubuntu"
-            go: "1.24.x"
+            go: "1.25.x"
             use32bit: true
           - os: "windows"
-            go: "1.24.x"
+            go: "1.25.x"
             race: false
           - os: "macos"
-            go: "1.24.x"
+            go: "1.25.x"
             race: false
     runs-on: ${{ fromJSON(vars[format('INTEGRATION_RUNNER_{0}', matrix.os)] || format('"{0}-latest"', matrix.os)) }}
     timeout-minutes: 30
@@ -32,7 +32,7 @@ jobs:
       TIMESCALE_FACTOR: 3
     name: "Integration (${{ matrix.os }}, Go ${{ matrix.go }}${{ matrix.race && ', race' || '' }}${{ matrix.use32bit && ', 32-bit' || '' }})"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go }}

@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/quic-go/quic-go"
-	"github.com/quic-go/quic-go/internal/protocol"
 	"github.com/quic-go/quic-go/quicvarint"
 
 	"github.com/quic-go/qpack"
@@ -272,7 +271,7 @@ func (s *Server) ServeQUICConn(conn *quic.Conn) error {
 // ServeListener serves an existing QUIC listener.
 // Make sure you use http3.ConfigureTLSConfig to configure a tls.Config
 // and use it to construct a http3-friendly QUIC listener.
-// Closing the server does close the listener.
+// Closing the server does not close the listener. It is the application's responsibility to close them.
 // ServeListener always returns a non-nil error. After Shutdown or Close, the returned error is http.ErrServerClosed.
 func (s *Server) ServeListener(ln QUICListener) error {
 	s.mutex.Lock()
@@ -468,7 +467,7 @@ func (s *Server) handleConn(conn *quic.Conn) error {
 		connCtx,
 		conn,
 		s.EnableDatagrams,
-		protocol.PerspectiveServer,
+		true, // server
 		s.Logger,
 		s.IdleTimeout,
 	)

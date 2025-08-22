@@ -28,12 +28,12 @@ func TestAppendAndParseTimestampFrame(t *testing.T) {
 	data, err := f.Append(nil, protocol.Version1)
 	require.NoError(t, err)
 
+	expected := []byte{byte(FrameTypeTimestamp)}
+	expected = append(expected, encodeVarInt(uint64(424242))...)
+	require.Equal(t, data, expected)
+
 	r := bytes.NewReader(data)
 	typ, err := quicvarint.Read(r)
 	require.NoError(t, err)
-	require.Equal(t, typ, uint64(timestampFrameType))
-
-	expected := []byte{timestampFrameType}
-	expected = append(expected, encodeVarInt(uint64(424242))...)
-	require.Equal(t, data, expected)
+	require.Equal(t, typ, uint64(FrameTypeTimestamp))
 }

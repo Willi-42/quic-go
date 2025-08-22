@@ -13,21 +13,20 @@ import (
 
 func TestReceivedPacketTrackerGenerateACKs(t *testing.T) {
 	tracker := newReceivedPacketTracker()
-	baseTime := time.Now().Add(-10 * time.Second)
 
-	require.NoError(t, tracker.ReceivedPacket(protocol.PacketNumber(3), protocol.ECNNon, baseTime, true))
+	require.NoError(t, tracker.ReceivedPacket(protocol.PacketNumber(3), protocol.ECNNon, true))
 	ack := tracker.GetAckFrame()
 	require.NotNil(t, ack)
 	require.Equal(t, []wire.AckRange{{Smallest: 3, Largest: 3}}, ack.AckRanges)
 	require.Zero(t, ack.DelayTime)
 
-	require.NoError(t, tracker.ReceivedPacket(protocol.PacketNumber(4), protocol.ECNNon, baseTime.Add(time.Second), true))
+	require.NoError(t, tracker.ReceivedPacket(protocol.PacketNumber(4), protocol.ECNNon, true))
 	ack = tracker.GetAckFrame()
 	require.NotNil(t, ack)
 	require.Equal(t, []wire.AckRange{{Smallest: 3, Largest: 4}}, ack.AckRanges)
 	require.Zero(t, ack.DelayTime)
 
-	require.NoError(t, tracker.ReceivedPacket(protocol.PacketNumber(1), protocol.ECNNon, baseTime.Add(time.Second), true))
+	require.NoError(t, tracker.ReceivedPacket(protocol.PacketNumber(1), protocol.ECNNon, true))
 	ack = tracker.GetAckFrame()
 	require.NotNil(t, ack)
 	require.Equal(t, []wire.AckRange{
@@ -37,10 +36,10 @@ func TestReceivedPacketTrackerGenerateACKs(t *testing.T) {
 	require.Zero(t, ack.DelayTime)
 
 	// non-ack-eliciting packets don't trigger ACKs
-	require.NoError(t, tracker.ReceivedPacket(protocol.PacketNumber(10), protocol.ECNNon, baseTime.Add(5*time.Second), false))
+	require.NoError(t, tracker.ReceivedPacket(protocol.PacketNumber(10), protocol.ECNNon, false))
 	require.Nil(t, tracker.GetAckFrame())
 
-	require.NoError(t, tracker.ReceivedPacket(protocol.PacketNumber(11), protocol.ECNNon, baseTime.Add(10*time.Second), true))
+	require.NoError(t, tracker.ReceivedPacket(protocol.PacketNumber(11), protocol.ECNNon, true))
 	ack = tracker.GetAckFrame()
 	require.NotNil(t, ack)
 	require.Equal(t, []wire.AckRange{
@@ -55,11 +54,11 @@ func TestAppDataReceivedPacketTrackerECN(t *testing.T) {
 
 	require.NoError(t, tr.ReceivedPacket(0, protocol.ECT0, time.Now(), true))
 	pn := protocol.PacketNumber(1)
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		require.NoError(t, tr.ReceivedPacket(pn, protocol.ECT1, time.Now(), true))
 		pn++
 	}
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		require.NoError(t, tr.ReceivedPacket(pn, protocol.ECNCE, time.Now(), true))
 		pn++
 	}
@@ -124,18 +123,30 @@ func TestAppDataReceivedPacketTrackerQueuesECNCE(t *testing.T) {
 func TestAppDataReceivedPacketTrackerMissingPackets(t *testing.T) {
 	tr := newAppDataReceivedPacketTracker(utils.DefaultLogger)
 
+	now := time.Now()
 	// the first packet is always acknowledged
-	require.NoError(t, tr.ReceivedPacket(0, protocol.ECNNon, time.Now(), true))
-	require.NotNil(t, tr.GetAckFrame(time.Now(), true))
+	require.NoError(t, tr.ReceivedPacket(0, protocol.ECNNon, now, true))
+	require.NotNil(t, tr.GetAckFrame(now, true))
 
-	require.NoError(t, tr.ReceivedPacket(5, protocol.ECNNon, time.Now(), true))
-	ack := tr.GetAckFrame(time.Now(), true) // ACK: 0 and 5, missing: 1, 2, 3, 4
+	require.NoError(t, tr.ReceivedPacket(5, protocol.ECNNon, now, true))
+	ack := tr.GetAckFrame(now, true) // ACK: 0 and 5, missing: 1, 2, 3, 4
 	require.NotNil(t, ack)
 	require.Equal(t, []wire.AckRange{{Smallest: 5, Largest: 5}, {Smallest: 0, Largest: 0}}, ack.AckRanges)
 
 	// now receive one of the missing packets
-	require.NoError(t, tr.ReceivedPacket(3, protocol.ECNNon, time.Now(), true))
-	require.NotNil(t, tr.GetAckFrame(time.Now(), true))
+	require.NoError(t, tr.ReceivedPacket(3, protocol.ECNNon, now, true))
+	ack = tr.GetAckFrame(now, true)
+	require.NotNil(t, ack)
+	require.Equal(t, []wire.AckRange{
+		{Smallest: 5, Largest: 5},
+		{Smallest: 3, Largest: 3},
+		{Smallest: 0, Largest: 0},
+	}, ack.AckRanges)
+
+	require.NoError(t, tr.ReceivedPacket(6, protocol.ECNNon, now, true))
+	require.Nil(t, tr.GetAckFrame(now, true))
+	require.NoError(t, tr.ReceivedPacket(8, protocol.ECNNon, now, true))
+	require.NotNil(t, tr.GetAckFrame(now, true))
 }
 
 func TestAppDataReceivedPacketTrackerDelayTime(t *testing.T) {
@@ -181,6 +192,6 @@ func TestAppDataReceivedPacketTrackerIgnoreBelow(t *testing.T) {
 	// make sure that old packets are not accepted
 	require.ErrorContains(t,
 		tr.ReceivedPacket(4, protocol.ECNNon, time.Now(), true),
-		"recevedPacketTracker BUG: ReceivedPacket called for old / duplicate packet 4",
+		"receivedPacketTracker BUG: ReceivedPacket called for old / duplicate packet 4",
 	)
 }

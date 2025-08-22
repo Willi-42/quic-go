@@ -127,7 +127,8 @@ type Conn struct {
 	connIDManager   *connIDManager
 	connIDGenerator *connIDGenerator
 
-	rttStats *utils.RTTStats
+	rttStats  *utils.RTTStats
+	connStats utils.ConnectionStats
 
 	cryptoStreamManager   *cryptoStreamManager
 	sentPacketHandler     ackhandler.SentPacketHandler
@@ -286,6 +287,7 @@ var newConnection = func(
 		0,
 		protocol.ByteCount(s.config.InitialPacketSize),
 		s.rttStats,
+		&s.connStats,
 		clientAddressValidated,
 		s.conn.capabilities().ECN,
 		s.perspective,
@@ -402,6 +404,7 @@ var newClientConnection = func(
 		initialPacketNumber,
 		protocol.ByteCount(s.config.InitialPacketSize),
 		s.rttStats,
+		&s.connStats,
 		false, // has no effect
 		s.conn.capabilities().ECN,
 		s.perspective,
@@ -477,6 +480,7 @@ func (c *Conn) preSetup() {
 	c.frameParser = *wire.NewFrameParser(
 		c.config.EnableDatagrams,
 		c.config.EnableStreamResetPartialDelivery,
+		false, // ACK_FREQUENCY is not supported yet
 	)
 	c.rttStats = &utils.RTTStats{}
 	c.connFlowController = flowcontrol.NewConnectionFlowController(
@@ -734,6 +738,61 @@ func (c *Conn) ConnectionState() ConnectionState {
 	c.connState.SupportsStreamResetPartialDelivery = c.peerParams.EnableResetStreamAt
 	c.connState.GSO = c.conn.capabilities().GSO
 	return c.connState
+}
+
+// ConnectionStats contains statistics about the QUIC connection
+type ConnectionStats struct {
+	// MinRTT is the estimate of the minimum RTT observed on the active network
+	// path.
+	MinRTT time.Duration
+	// LatestRTT is the last RTT sample observed on the active network path.
+	LatestRTT time.Duration
+	// SmoothedRTT is an exponentially weighted moving average of an endpoint's
+	// RTT samples. See https://www.rfc-editor.org/rfc/rfc9002#section-5.3
+	SmoothedRTT time.Duration
+	// MeanDeviation estimates the variation in the RTT samples using a mean
+	// variation. See https://www.rfc-editor.org/rfc/rfc9002#section-5.3
+	MeanDeviation time.Duration
+
+	// BytesSent is the number of bytes sent on the underlying connection,
+	// including retransmissions. Does not include UDP or any other outer
+	// framing.
+	BytesSent uint64
+	// PacketsSent is the number of packets sent on the underlying connection,
+	// including those that are determined to have been lost.
+	PacketsSent uint64
+	// BytesReceived is the number of total bytes received on the underlying
+	// connection, including duplicate data for streams. Does not include UDP or
+	// any other outer framing.
+	BytesReceived uint64
+	// PacketsReceived is the number of total packets received on the underlying
+	// connection, including packets that were not processable.
+	PacketsReceived uint64
+	// BytesLost is the number of bytes lost on the underlying connection (does
+	// not monotonically increase, because packets that are declared lost can
+	// subsequently be received). Does not include UDP or any other outer
+	// framing.
+	BytesLost uint64
+	// PacketsLost is the number of packets lost on the underlying connection
+	// (does not monotonically increase, because packets that are declared lost
+	// can subsequently be received).
+	PacketsLost uint64
+}
+
+func (c *Conn) ConnectionStats() ConnectionStats {
+	return ConnectionStats{
+		MinRTT:        c.rttStats.MinRTT(),
+		LatestRTT:     c.rttStats.LatestRTT(),
+		SmoothedRTT:   c.rttStats.SmoothedRTT(),
+		MeanDeviation: c.rttStats.MeanDeviation(),
+
+		BytesSent:       c.connStats.BytesSent.Load(),
+		PacketsSent:     c.connStats.PacketsSent.Load(),
+		BytesReceived:   c.connStats.BytesReceived.Load(),
+		PacketsReceived: c.connStats.PacketsReceived.Load(),
+		BytesLost:       c.connStats.BytesLost.Load(),
+		PacketsLost:     c.connStats.PacketsLost.Load(),
+	}
 }
 
 // Time when the connection should time out
@@ -1441,39 +1500,103 @@ func (c *Conn) handleFrames(
 	}
 	handshakeWasComplete := c.handshakeComplete
 	var handleErr error
+	var skipHandling bool
+
 	for len(data) > 0 {
-		l, frame, err := c.frameParser.ParseNext(data, encLevel, c.version)
+		frameType, l, err := c.frameParser.ParseType(data, encLevel)
 		if err != nil {
+			// The frame parser skips over PADDING frames, and returns an io.EOF if the PADDING
+			// frames were the last frames in this packet.
+			if err == io.EOF {
+				break
+			}
 			return false, false, nil, err
 		}
 		data = data[l:]
-		if frame == nil {
-			break
-		}
-		if ackhandler.IsFrameAckEliciting(frame) {
+
+		if ackhandler.IsFrameTypeAckEliciting(frameType) {
 			isAckEliciting = true
 		}
-		if !wire.IsProbingFrame(frame) {
+		if !wire.IsProbingFrameType(frameType) {
 			isNonProbing = true
 		}
-		if log != nil {
-			frames = append(frames, toLoggingFrame(frame))
-		}
-		// An error occurred handling a previous frame.
-		// Don't handle the current frame.
-		if handleErr != nil {
-			continue
-		}
-		pc, err := c.handleFrame(frame, encLevel, destConnID, rcvTime)
-		if err != nil {
-			if log == nil {
+
+		// We're inlining common cases, to avoid using interfaces
+		// Fast path: STREAM, DATAGRAM and ACK
+		if frameType.IsStreamFrameType() {
+			streamFrame, l, err := c.frameParser.ParseStreamFrame(frameType, data, c.version)
+			if err != nil {
 				return false, false, nil, err
 			}
-			// If we're logging, we need to keep parsing (but not handling) all frames.
+			data = data[l:]
+
+			if log != nil {
+				frames = append(frames, toLoggingFrame(streamFrame))
+			}
+			// an error occurred handling a previous frame, don't handle the current frame
+			if skipHandling {
+				continue
+			}
+			wire.LogFrame(c.logger, streamFrame, false)
+			handleErr = c.streamsMap.HandleStreamFrame(streamFrame, rcvTime)
+		} else if frameType.IsAckFrameType() {
+			ackFrame, l, err := c.frameParser.ParseAckFrame(frameType, data, encLevel, c.version)
+			if err != nil {
+				return false, false, nil, err
+			}
+			data = data[l:]
+			if log != nil {
+				frames = append(frames, toLoggingFrame(ackFrame))
+			}
+			// an error occurred handling a previous frame, don't handle the current frame
+			if skipHandling {
+				continue
+			}
+			wire.LogFrame(c.logger, ackFrame, false)
+			handleErr = c.handleAckFrame(ackFrame, encLevel, rcvTime)
+		} else if frameType.IsDatagramFrameType() {
+			datagramFrame, l, err := c.frameParser.ParseDatagramFrame(frameType, data, c.version)
+			if err != nil {
+				return false, false, nil, err
+			}
+			data = data[l:]
+
+			if log != nil {
+				frames = append(frames, toLoggingFrame(datagramFrame))
+			}
+			// an error occurred handling a previous frame, don't handle the current frame
+			if skipHandling {
+				continue
+			}
+			wire.LogFrame(c.logger, datagramFrame, false)
+			handleErr = c.handleDatagramFrame(datagramFrame)
+		} else {
+			frame, l, err := c.frameParser.ParseLessCommonFrame(frameType, data, c.version)
+			if err != nil {
+				return false, false, nil, err
+			}
+			data = data[l:]
+
+			if log != nil {
+				frames = append(frames, toLoggingFrame(frame))
+			}
+			// an error occurred handling a previous frame, don't handle the current frame
+			if skipHandling {
+				continue
+			}
+			pc, err := c.handleFrame(frame, encLevel, destConnID, rcvTime)
+			if pc != nil {
+				pathChallenge = pc
+			}
 			handleErr = err
 		}
-		if pc != nil {
-			pathChallenge = pc
+
+		if handleErr != nil {
+			// if we're logging, we need to keep parsing (but not handling) all frames
+			skipHandling = true
+			if log == nil {
+				return false, false, nil, handleErr
+			}
 		}
 	}
 
@@ -1507,10 +1630,6 @@ func (c *Conn) handleFrame(
 	switch frame := f.(type) {
 	case *wire.CryptoFrame:
 		err = c.handleCryptoFrame(frame, encLevel, rcvTime)
-	case *wire.StreamFrame:
-		err = c.streamsMap.HandleStreamFrame(frame, rcvTime)
-	case *wire.AckFrame:
-		err = c.handleAckFrame(frame, encLevel, rcvTime)
 	case *wire.ConnectionCloseFrame:
 		err = c.handleConnectionCloseFrame(frame)
 	case *wire.ResetStreamFrame:
@@ -1541,8 +1660,6 @@ func (c *Conn) handleFrame(
 		err = c.connIDGenerator.Retire(frame.SequenceNumber, destConnID, rcvTime.Add(3*c.rttStats.PTO(false)))
 	case *wire.HandshakeDoneFrame:
 		err = c.handleHandshakeDoneFrame(rcvTime)
-	case *wire.DatagramFrame:
-		err = c.handleDatagramFrame(frame)
 	case *wire.TimestampFrame:
 		err = c.handleTimestampFrame(frame)
 	default:
@@ -2599,16 +2716,26 @@ func (c *Conn) LocalAddr() net.Addr { return c.conn.LocalAddr() }
 // RemoteAddr returns the remote address of the QUIC connection.
 func (c *Conn) RemoteAddr() net.Addr { return c.conn.RemoteAddr() }
 
+// getPathManager lazily initializes the Conn's pathManagerOutgoing.
+// May create multiple pathManagerOutgoing objects if called concurrently.
 func (c *Conn) getPathManager() *pathManagerOutgoing {
-	c.pathManagerOutgoing.CompareAndSwap(nil,
-		func() *pathManagerOutgoing { // this function is only called if a swap is performed
-			return newPathManagerOutgoing(
-				c.connIDManager.GetConnIDForPath,
-				c.connIDManager.RetireConnIDForPath,
-				c.scheduleSending,
-			)
-		}(),
+	old := c.pathManagerOutgoing.Load()
+	if old != nil {
+		// Path manager is already initialized
+		return old
+	}
+
+	// Initialize the path manager
+	new := newPathManagerOutgoing(
+		c.connIDManager.GetConnIDForPath,
+		c.connIDManager.RetireConnIDForPath,
+		c.scheduleSending,
 	)
+	if c.pathManagerOutgoing.CompareAndSwap(old, new) {
+		return new
+	}
+
+	// Swap failed. A concurrent writer wrote first, use their value.
 	return c.pathManagerOutgoing.Load()
 }
 

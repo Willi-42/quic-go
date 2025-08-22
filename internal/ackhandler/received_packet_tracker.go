@@ -9,6 +9,8 @@ import (
 	"github.com/quic-go/quic-go/internal/wire"
 )
 
+const reorderingThreshold = 1
+
 // The receivedPacketTracker tracks packets for the Initial and Handshake packet number space.
 // Every received packet is acknowledged immediately.
 type receivedPacketTracker struct {
@@ -24,9 +26,9 @@ func newReceivedPacketTracker() *receivedPacketTracker {
 	return &receivedPacketTracker{packetHistory: *newReceivedPacketHistory()}
 }
 
-func (h *receivedPacketTracker) ReceivedPacket(pn protocol.PacketNumber, ecn protocol.ECN, rcvTime time.Time, ackEliciting bool) error {
+func (h *receivedPacketTracker) ReceivedPacket(pn protocol.PacketNumber, ecn protocol.ECN, ackEliciting bool) error {
 	if isNew := h.packetHistory.ReceivedPacket(pn); !isNew {
-		return fmt.Errorf("recevedPacketTracker BUG: ReceivedPacket called for old / duplicate packet %d", pn)
+		return fmt.Errorf("receivedPacketTracker BUG: ReceivedPacket called for old / duplicate packet %d", pn)
 	}
 
 	//nolint:exhaustive // Only need to count ECT(0), ECT(1) and ECN-CE.
@@ -102,7 +104,7 @@ func newAppDataReceivedPacketTracker(logger utils.Logger) *appDataReceivedPacket
 }
 
 func (h *appDataReceivedPacketTracker) ReceivedPacket(pn protocol.PacketNumber, ecn protocol.ECN, rcvTime time.Time, ackEliciting bool) error {
-	if err := h.receivedPacketTracker.ReceivedPacket(pn, ecn, rcvTime, ackEliciting); err != nil {
+	if err := h.receivedPacketTracker.ReceivedPacket(pn, ecn, ackEliciting); err != nil {
 		return err
 	}
 	if pn >= h.largestObserved {
@@ -150,11 +152,18 @@ func (h *appDataReceivedPacketTracker) isMissing(p protocol.PacketNumber) bool {
 }
 
 func (h *appDataReceivedPacketTracker) hasNewMissingPackets() bool {
-	if h.lastAck == nil {
+	if h.largestObserved < reorderingThreshold {
 		return false
 	}
-	highestRange := h.packetHistory.GetHighestAckRange()
-	return highestRange.Smallest > h.lastAck.LargestAcked()+1 && highestRange.Len() == 1
+	highestMissing := h.packetHistory.HighestMissingUpTo(h.largestObserved - reorderingThreshold)
+	if highestMissing == protocol.InvalidPacketNumber {
+		return false
+	}
+	if highestMissing < h.lastAck.LargestAcked() {
+		// the packet was already reported missing in the last ACK
+		return false
+	}
+	return highestMissing > h.lastAck.LargestAcked()-reorderingThreshold
 }
 
 func (h *appDataReceivedPacketTracker) shouldQueueACK(pn protocol.PacketNumber, ecn protocol.ECN, wasMissing bool) bool {
