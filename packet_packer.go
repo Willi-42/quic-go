@@ -700,6 +700,12 @@ func (p *packetPacker) composeNextPacket(
 	}
 
 	if hasRetransmission {
+		if p.sendTimestamps && !tsAdded && pl.length+tsLen <= maxPayloadSize-pl.length {
+			pl.frames = append(pl.frames, ackhandler.Frame{Frame: &tsframe})
+			pl.length += tsLen
+			tsAdded = true
+		}
+
 		for {
 			remainingLen := maxPayloadSize - pl.length
 			if remainingLen < protocol.MinStreamFrameSize {
@@ -715,15 +721,16 @@ func (p *packetPacker) composeNextPacket(
 	}
 
 	if hasData {
-		var lengthAdded protocol.ByteCount
-		startLen := len(pl.frames)
-		pl.frames, pl.streamFrames, lengthAdded = p.framer.Append(pl.frames, pl.streamFrames, maxPayloadSize-pl.length, now, v)
-		pl.length += lengthAdded
-
+		// add timestamp first
 		if p.sendTimestamps && !tsAdded && pl.length+tsLen <= maxPayloadSize-pl.length {
 			pl.frames = append(pl.frames, ackhandler.Frame{Frame: &tsframe})
 			pl.length += tsLen
 		}
+
+		var lengthAdded protocol.ByteCount
+		startLen := len(pl.frames)
+		pl.frames, pl.streamFrames, lengthAdded = p.framer.Append(pl.frames, pl.streamFrames, maxPayloadSize-pl.length, now, v)
+		pl.length += lengthAdded
 
 		// add handlers for the control frames that were added
 		for i := startLen; i < len(pl.frames); i++ {
