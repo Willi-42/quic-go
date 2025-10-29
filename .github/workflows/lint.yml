@@ -8,7 +8,7 @@ jobs:
       GOEXPERIMENT: ${{ matrix.go == '1.24.x' && 'synctest' || '' }}
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.25.x"
       - name: Check for //go:build ignore in .go files
@@ -20,12 +20,7 @@ jobs:
           fi
       - name: Check that go.mod is tidied
         if: success() || failure() # run this step even if the previous one failed
-        run: |
-          cp go.mod go.mod.orig
-          cp go.sum go.sum.orig
-          go mod tidy
-          diff go.mod go.mod.orig
-          diff go.sum go.sum.orig
+        run: go mod tidy -diff
       - name: Run code generators
         if: success() || failure() # run this step even if the previous one failed
         run: .github/workflows/go-generate.sh
@@ -46,7 +41,7 @@ jobs:
     name: golangci-lint (Go ${{ matrix.go }})
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: ${{ matrix.go }}
       - name: golangci-lint (Linux)
