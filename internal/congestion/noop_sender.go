@@ -2,8 +2,8 @@ package congestion
 
 import (
 	"math"
-	"time"
 
+	"github.com/quic-go/quic-go/internal/monotime"
 	"github.com/quic-go/quic-go/internal/protocol"
 )
 
@@ -13,15 +13,15 @@ type NoOpSendAlgorithm struct {
 func (n NoOpSendAlgorithm) SetMaxDatagramSize(count protocol.ByteCount) {
 }
 
-func (n NoOpSendAlgorithm) TimeUntilSend(bytesInFlight protocol.ByteCount) time.Time {
-	return time.Time{}
+func (n NoOpSendAlgorithm) TimeUntilSend(bytesInFlight protocol.ByteCount) monotime.Time {
+	return 0
 }
 
-func (n NoOpSendAlgorithm) HasPacingBudget(_ time.Time) bool {
+func (n NoOpSendAlgorithm) HasPacingBudget(_ monotime.Time) bool {
 	return true
 }
 
-func (n NoOpSendAlgorithm) OnPacketSent(sentTime time.Time, bytesInFlight protocol.ByteCount, packetNumber protocol.PacketNumber, bytes protocol.ByteCount, isRetransmittable bool) {
+func (n NoOpSendAlgorithm) OnPacketSent(sentTime monotime.Time, bytesInFlight protocol.ByteCount, packetNumber protocol.PacketNumber, bytes protocol.ByteCount, isRetransmittable bool) {
 }
 
 func (n NoOpSendAlgorithm) CanSend(bytesInFlight protocol.ByteCount) bool {
@@ -31,7 +31,7 @@ func (n NoOpSendAlgorithm) CanSend(bytesInFlight protocol.ByteCount) bool {
 func (n NoOpSendAlgorithm) MaybeExitSlowStart() {
 }
 
-func (n NoOpSendAlgorithm) OnPacketAcked(number protocol.PacketNumber, ackedBytes protocol.ByteCount, priorInFlight protocol.ByteCount, eventTime time.Time) {
+func (n NoOpSendAlgorithm) OnPacketAcked(number protocol.PacketNumber, ackedBytes protocol.ByteCount, priorInFlight protocol.ByteCount, eventTime monotime.Time) {
 }
 
 func (n NoOpSendAlgorithm) OnCongestionEvent(number protocol.PacketNumber, lostBytes protocol.ByteCount, priorInFlight protocol.ByteCount) {

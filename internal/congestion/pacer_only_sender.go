@@ -3,8 +3,8 @@ package congestion
 import (
 	"fmt"
 	"math"
-	"time"
 
+	"github.com/quic-go/quic-go/internal/monotime"
 	"github.com/quic-go/quic-go/internal/protocol"
 	"github.com/quic-go/quic-go/internal/utils"
 	"github.com/quic-go/quic-go/logging"
@@ -104,11 +104,11 @@ func newPacerOnlySendAlgorithm(
 }
 
 // TimeUntilSend returns when the next packet should be sent.
-func (c *PacerOnlySendAlgorithm) TimeUntilSend(_ protocol.ByteCount) time.Time {
+func (c *PacerOnlySendAlgorithm) TimeUntilSend(_ protocol.ByteCount) monotime.Time {
 	return c.pacer.TimeUntilSend()
 }
 
-func (c *PacerOnlySendAlgorithm) HasPacingBudget(now time.Time) bool {
+func (c *PacerOnlySendAlgorithm) HasPacingBudget(now monotime.Time) bool {
 	return c.pacer.Budget(now) >= c.maxDatagramSize
 }
 
@@ -121,7 +121,7 @@ func (c *PacerOnlySendAlgorithm) minCongestionWindow() protocol.ByteCount {
 }
 
 func (c *PacerOnlySendAlgorithm) OnPacketSent(
-	sentTime time.Time,
+	sentTime monotime.Time,
 	_ protocol.ByteCount,
 	packetNumber protocol.PacketNumber,
 	bytes protocol.ByteCount,
@@ -168,7 +168,7 @@ func (c *PacerOnlySendAlgorithm) OnPacketAcked(
 	ackedPacketNumber protocol.PacketNumber,
 	ackedBytes protocol.ByteCount,
 	priorInFlight protocol.ByteCount,
-	eventTime time.Time,
+	eventTime monotime.Time,
 ) {
 	c.largestAckedPacketNumber = max(ackedPacketNumber, c.largestAckedPacketNumber)
 	if c.InRecovery() {
@@ -210,7 +210,7 @@ func (c *PacerOnlySendAlgorithm) maybeIncreaseCwnd(
 	_ protocol.PacketNumber,
 	ackedBytes protocol.ByteCount,
 	priorInFlight protocol.ByteCount,
-	eventTime time.Time,
+	eventTime monotime.Time,
 ) {
 	// Do not increase the congestion window unless the sender is close to using
 	// the current window.

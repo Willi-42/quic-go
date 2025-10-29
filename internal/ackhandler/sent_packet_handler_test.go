@@ -1401,6 +1401,8 @@ func TestSentPacketHandlerSpuriousLoss(t *testing.T) {
 		protocol.PerspectiveClient,
 		tracer,
 		utils.DefaultLogger,
+		congestion.DefaultCC,
+		false,
 	)
 
 	var packets packetTracker
@@ -1492,6 +1494,8 @@ func benchmarkSendAndAcknowledge(b *testing.B, ackEvery, inFlight int) {
 		protocol.PerspectiveClient,
 		nil,
 		utils.DefaultLogger,
+		congestion.DefaultCC,
+		false,
 	)
 	now := monotime.Now()
 	sph.DropPackets(protocol.EncryptionInitial, now)
