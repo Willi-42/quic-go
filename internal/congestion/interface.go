@@ -13,6 +13,13 @@ const (
 	PacerOnly
 )
 
+type InternalpacerType int
+
+const (
+	DefaultPacer InternalpacerType = iota
+	RatePacer
+)
+
 // A SendAlgorithm performs congestion control
 type SendAlgorithm interface {
 	TimeUntilSend(bytesInFlight protocol.ByteCount) monotime.Time
@@ -24,6 +31,7 @@ type SendAlgorithm interface {
 	OnCongestionEvent(number protocol.PacketNumber, lostBytes protocol.ByteCount, priorInFlight protocol.ByteCount)
 	OnRetransmissionTimeout(packetsRetransmitted bool)
 	SetMaxDatagramSize(protocol.ByteCount)
+	SetPacerRate(protocol.ByteCount)
 }
 
 // A SendAlgorithmWithDebugInfos is a SendAlgorithm that exposes some debug infos
@@ -32,4 +40,12 @@ type SendAlgorithmWithDebugInfos interface {
 	InSlowStart() bool
 	InRecovery() bool
 	GetCongestionWindow() protocol.ByteCount
+}
+
+type PacerInt interface {
+	SentPacket(sendTime monotime.Time, size protocol.ByteCount)
+	Budget(now monotime.Time) protocol.ByteCount
+	SetRate(protocol.ByteCount)
+	SetMaxDatagramSize(s protocol.ByteCount)
+	TimeUntilSend() monotime.Time
 }

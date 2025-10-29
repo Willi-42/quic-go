@@ -129,10 +129,16 @@ func populateConfig(config *Config) *Config {
 		CcType:                           config.CcType,
 		DisablePnSkips:                   config.DisablePnSkips,
 		SendTimestamps:                   config.SendTimestamps,
+		PacerType:                        config.PacerType,
 	}
 }
 
 func ccToInternalCC(ccType CCType) congestion.InternalccType {
 	toInt := int(ccType)
 	return congestion.InternalccType(toInt)
+}
+
+func pacerToInternalPacer(pacer PacerType) congestion.InternalpacerType {
+	toInt := int(pacer)
+	return congestion.InternalpacerType(toInt)
 }

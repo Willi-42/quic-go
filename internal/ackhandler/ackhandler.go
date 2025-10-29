@@ -22,7 +22,8 @@ func NewAckHandler(
 	logger utils.Logger,
 	ccType congestion.InternalccType,
 	disablePnSkips bool,
+	pacerType congestion.InternalpacerType,
 ) (SentPacketHandler, ReceivedPacketHandler) {
-	sph := newSentPacketHandler(initialPacketNumber, initialMaxDatagramSize, rttStats, connStats, clientAddressValidated, enableECN, pers, tracer, logger, ccType, disablePnSkips)
+	sph := newSentPacketHandler(initialPacketNumber, initialMaxDatagramSize, rttStats, connStats, clientAddressValidated, enableECN, pers, tracer, logger, ccType, disablePnSkips, pacerType)
 	return sph, newReceivedPacketHandler(sph, logger)
 }

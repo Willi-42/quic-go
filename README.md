@@ -31,6 +31,8 @@ Detailed documentation can be found on [quic-go.net](https://quic-go.net/docs/).
 ```go
 // What CC to use: Reno, none or pacer only
 CcType CCType
+// What pacer to use: default quic-go pacer or rate based pacer
+PacerType PacerType
 // Disables the packet number skipping of quic. Use with care.
 DisablePnSkips bool
 // Send timestamp frame with each packet.

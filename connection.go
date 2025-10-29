@@ -315,6 +315,7 @@ var newConnection = func(
 		s.logger,
 		ccToInternalCC(conf.CcType),
 		s.config.DisablePnSkips,
+		pacerToInternalPacer(conf.PacerType),
 	)
 	s.currentMTUEstimate.Store(uint32(estimateMaxPayloadSize(protocol.ByteCount(s.config.InitialPacketSize))))
 	statelessResetToken := statelessResetter.GetStatelessResetToken(srcConnID)
@@ -432,6 +433,7 @@ var newClientConnection = func(
 		s.logger,
 		ccToInternalCC(conf.CcType),
 		s.config.DisablePnSkips,
+		pacerToInternalPacer(conf.PacerType),
 	)
 	s.currentMTUEstimate.Store(uint32(estimateMaxPayloadSize(protocol.ByteCount(s.config.InitialPacketSize))))
 	oneRTTStream := newCryptoStream()
@@ -2850,4 +2852,8 @@ func (c *Conn) NextConnection(ctx context.Context) (*Conn, error) {
 // connection ID length), and the size of the encryption tag.
 func estimateMaxPayloadSize(mtu protocol.ByteCount) protocol.ByteCount {
 	return mtu - 1 /* type byte */ - 20 /* maximum connection ID length */ - 16 /* tag size */
+}
+
+func (c *Conn) SetPacerRate(rateBytes uint) {
+	c.sentPacketHandler.SetPacerRate(protocol.ByteCount(rateBytes))
 }

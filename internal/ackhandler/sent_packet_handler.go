@@ -111,6 +111,8 @@ type sentPacketHandler struct {
 
 	tracer *logging.ConnectionTracer
 	logger utils.Logger
+
+	pacerType congestion.InternalpacerType
 }
 
 var (
@@ -132,6 +134,7 @@ func newSentPacketHandler(
 	logger utils.Logger,
 	ccType congestion.InternalccType,
 	disablePnSkips bool,
+	pacerType congestion.InternalpacerType,
 ) *sentPacketHandler {
 
 	var cc congestion.SendAlgorithmWithDebugInfos
@@ -145,12 +148,15 @@ func newSentPacketHandler(
 			initialMaxDatagramSize,
 			true, // use Reno
 			tracer,
+			pacerType,
 		)
 	case congestion.PacerOnly:
 		cc = congestion.NewPacerOnlySendAlgorithm(congestion.DefaultClock{},
 			rttStats,
 			initialMaxDatagramSize,
-			tracer)
+			tracer,
+			pacerType,
+		)
 	case congestion.DisabledCC:
 		cc = congestion.NoOpSendAlgorithm{}
 	}
@@ -168,12 +174,17 @@ func newSentPacketHandler(
 		perspective:                    pers,
 		tracer:                         tracer,
 		logger:                         logger,
+		pacerType:                      pacerType,
 	}
 	if enableECN {
 		h.enableECN = true
 		h.ecnTracker = newECNTracker(logger, tracer)
 	}
 	return h
+}
+
+func (h *sentPacketHandler) SetPacerRate(rate protocol.ByteCount) {
+	h.congestion.SetPacerRate(rate)
 }
 
 func (h *sentPacketHandler) removeFromBytesInFlight(p *packet) {
@@ -1079,6 +1090,7 @@ func (h *sentPacketHandler) MigratedPath(now monotime.Time, initialMaxDatagramSi
 		initialMaxDatagramSize,
 		true, // use Reno
 		h.tracer,
+		h.pacerType,
 	)
 	h.setLossDetectionTimer(now)
 }

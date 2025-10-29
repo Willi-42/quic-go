@@ -24,7 +24,7 @@ type cubicSender struct {
 	rttStats        *utils.RTTStats
 	connStats       *utils.ConnectionStats
 	cubic           *Cubic
-	pacer           *pacer
+	pacer           PacerInt
 	clock           Clock
 
 	reno bool
@@ -73,6 +73,7 @@ func NewCubicSender(
 	initialMaxDatagramSize protocol.ByteCount,
 	reno bool,
 	tracer *logging.ConnectionTracer,
+	pacerType InternalpacerType,
 ) *cubicSender {
 	return newCubicSender(
 		clock,
@@ -83,6 +84,7 @@ func NewCubicSender(
 		initialCongestionWindow*initialMaxDatagramSize,
 		protocol.MaxCongestionWindowPackets*initialMaxDatagramSize,
 		tracer,
+		pacerType,
 	)
 }
 
@@ -95,6 +97,7 @@ func newCubicSender(
 	initialCongestionWindow,
 	initialMaxCongestionWindow protocol.ByteCount,
 	tracer *logging.ConnectionTracer,
+	pacerType InternalpacerType,
 ) *cubicSender {
 	c := &cubicSender{
 		rttStats:                   rttStats,
@@ -112,7 +115,16 @@ func newCubicSender(
 		tracer:                     tracer,
 		maxDatagramSize:            initialMaxDatagramSize,
 	}
-	c.pacer = newPacer(c.BandwidthEstimate)
+
+	switch pacerType {
+	case DefaultPacer:
+		c.pacer = newPacer(c.BandwidthEstimate)
+	case RatePacer:
+		c.pacer = newRatePacer()
+	default:
+		panic(fmt.Sprintf("unknown pacer type %d", pacerType))
+	}
+
 	if c.tracer != nil && c.tracer.UpdatedCongestionState != nil {
 		c.lastState = logging.CongestionStateSlowStart
 		c.tracer.UpdatedCongestionState(logging.CongestionStateSlowStart)
@@ -324,4 +336,7 @@ func (c *cubicSender) SetMaxDatagramSize(s protocol.ByteCount) {
 		c.congestionWindow = c.minCongestionWindow()
 	}
 	c.pacer.SetMaxDatagramSize(s)
+}
+
+func (c *cubicSender) SetPacerRate(protocol.ByteCount) {
 }

@@ -42,9 +42,21 @@ type ClientToken struct {
 type CCType int
 
 const (
+	// default cc - Reno
 	DefaultCC CCType = iota
+	// no cc, no pacer
 	DisabledCC
+	// only a pacer, no cc
 	PacerOnly
+)
+
+type PacerType int
+
+const (
+	// default pacer of quic-go
+	DefaultPacer PacerType = iota
+	// a pacer based on the set rate (conn.SetPaceRate)
+	RatePacer
 )
 
 type TokenStore interface {
@@ -200,6 +212,8 @@ type Config struct {
 	Tracer                           func(context.Context, logging.Perspective, ConnectionID) *logging.ConnectionTracer
 	// What CC to use: Reno, none or pacer only
 	CcType CCType
+	// What pacer to use: default quic-go pacer or rate based pacer
+	PacerType PacerType
 	// Disables the packet number skipping of quic. Use with care.
 	DisablePnSkips bool
 	// Send timestamp frame with each packet.

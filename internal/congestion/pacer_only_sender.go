@@ -14,7 +14,7 @@ type PacerOnlySendAlgorithm struct {
 	hybridSlowStart HybridSlowStart
 	rttStats        *utils.RTTStats
 	cubic           *Cubic
-	pacer           *pacer
+	pacer           PacerInt
 	clock           Clock
 
 	reno bool
@@ -61,6 +61,7 @@ func NewPacerOnlySendAlgorithm(
 	rttStats *utils.RTTStats,
 	initialMaxDatagramSize protocol.ByteCount,
 	tracer *logging.ConnectionTracer,
+	pacerType InternalpacerType,
 ) *PacerOnlySendAlgorithm {
 	return newPacerOnlySendAlgorithm(
 		clock,
@@ -69,6 +70,7 @@ func NewPacerOnlySendAlgorithm(
 		initialCongestionWindow*initialMaxDatagramSize,
 		protocol.MaxCongestionWindowPackets*initialMaxDatagramSize,
 		tracer,
+		pacerType,
 	)
 }
 
@@ -79,6 +81,7 @@ func newPacerOnlySendAlgorithm(
 	initialCongestionWindow,
 	initialMaxCongestionWindow protocol.ByteCount,
 	tracer *logging.ConnectionTracer,
+	pacerType InternalpacerType,
 ) *PacerOnlySendAlgorithm {
 	c := &PacerOnlySendAlgorithm{
 		rttStats:                   rttStats,
@@ -95,7 +98,16 @@ func newPacerOnlySendAlgorithm(
 		tracer:                     tracer,
 		maxDatagramSize:            initialMaxDatagramSize,
 	}
-	c.pacer = newPacer(c.BandwidthEstimate)
+
+	switch pacerType {
+	case DefaultPacer:
+		c.pacer = newPacer(c.BandwidthEstimate)
+	case RatePacer:
+		c.pacer = newRatePacer()
+	default:
+		panic(fmt.Sprintf("unknown pacer type %d", pacerType))
+	}
+
 	if c.tracer != nil && c.tracer.UpdatedCongestionState != nil {
 		c.lastState = logging.CongestionStateSlowStart
 		c.tracer.UpdatedCongestionState(logging.CongestionStateSlowStart)
@@ -305,4 +317,8 @@ func (c *PacerOnlySendAlgorithm) SetMaxDatagramSize(s protocol.ByteCount) {
 		c.congestionWindow = c.minCongestionWindow()
 	}
 	c.pacer.SetMaxDatagramSize(s)
+}
+
+func (c *PacerOnlySendAlgorithm) SetPacerRate(b protocol.ByteCount) {
+	c.pacer.SetRate(b)
 }

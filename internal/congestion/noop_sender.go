@@ -51,3 +51,6 @@ func (n NoOpSendAlgorithm) InRecovery() bool {
 func (n NoOpSendAlgorithm) GetCongestionWindow() protocol.ByteCount {
 	return math.MaxInt64
 }
+
+func (c NoOpSendAlgorithm) SetPacerRate(b protocol.ByteCount) {
+}
