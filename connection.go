@@ -324,6 +324,9 @@ var newConnection = func(
 		s.perspective,
 		s.qlogger,
 		s.logger,
+		ccToInternalCC(conf.CcType),
+		s.config.DisablePnSkips,
+		pacerToInternalPacer(conf.PacerType),
 	)
 	s.currentMTUEstimate.Store(uint32(estimateMaxPayloadSize(protocol.ByteCount(s.config.InitialPacketSize))))
 	statelessResetToken := statelessResetter.GetStatelessResetToken(srcConnID)
@@ -371,7 +374,7 @@ var newConnection = func(
 		s.version,
 	)
 	s.cryptoStreamHandler = cs
-	s.packer = newPacketPacker(srcConnID, s.connIDManager.Get, s.initialStream, s.handshakeStream, s.sentPacketHandler, s.retransmissionQueue, cs, s.framer, s.receivedPacketHandler, s.datagramQueue, s.perspective)
+	s.packer = newPacketPacker(srcConnID, s.connIDManager.Get, s.initialStream, s.handshakeStream, s.sentPacketHandler, s.retransmissionQueue, cs, s.framer, s.receivedPacketHandler, s.datagramQueue, s.perspective, conf.SendTimestamps)
 	s.unpacker = newPacketUnpacker(cs, s.srcConnIDLen)
 	s.cryptoStreamManager = newCryptoStreamManager(s.initialStream, s.handshakeStream, s.oneRTTStream)
 	return &wrappedConn{Conn: s}
@@ -453,6 +456,9 @@ var newClientConnection = func(
 		s.perspective,
 		s.qlogger,
 		s.logger,
+		ccToInternalCC(conf.CcType),
+		s.config.DisablePnSkips,
+		pacerToInternalPacer(conf.PacerType),
 	)
 	s.currentMTUEstimate.Store(uint32(estimateMaxPayloadSize(protocol.ByteCount(s.config.InitialPacketSize))))
 	oneRTTStream := newCryptoStream()
@@ -497,7 +503,7 @@ var newClientConnection = func(
 	s.cryptoStreamHandler = cs
 	s.cryptoStreamManager = newCryptoStreamManager(s.initialStream, s.handshakeStream, oneRTTStream)
 	s.unpacker = newPacketUnpacker(cs, s.srcConnIDLen)
-	s.packer = newPacketPacker(srcConnID, s.connIDManager.Get, s.initialStream, s.handshakeStream, s.sentPacketHandler, s.retransmissionQueue, cs, s.framer, s.receivedPacketHandler, s.datagramQueue, s.perspective)
+	s.packer = newPacketPacker(srcConnID, s.connIDManager.Get, s.initialStream, s.handshakeStream, s.sentPacketHandler, s.retransmissionQueue, cs, s.framer, s.receivedPacketHandler, s.datagramQueue, s.perspective, conf.SendTimestamps)
 	if len(tlsConf.ServerName) > 0 {
 		s.tokenStoreKey = tlsConf.ServerName
 	} else {
@@ -546,7 +552,7 @@ func (c *Conn) preSetup() {
 		uint64(c.config.MaxIncomingUniStreams),
 		c.perspective,
 	)
-	c.framer = newFramer(c.connFlowController)
+	c.framer = newFramer(c.connFlowController, c.config.UsePriorityQueue)
 	c.receivedPackets.Init(8)
 	c.notifyReceivedPacket = make(chan struct{}, 1)
 	c.closeChan = make(chan struct{}, 1)
@@ -1936,6 +1942,8 @@ func (c *Conn) handleFrame(
 		err = c.connIDGenerator.Retire(frame.SequenceNumber, destConnID, rcvTime.Add(3*c.rttStats.PTO(false)))
 	case *wire.HandshakeDoneFrame:
 		err = c.handleHandshakeDoneFrame(rcvTime)
+	case *wire.TimestampFrame:
+		err = c.handleTimestampFrame(frame)
 	default:
 		err = fmt.Errorf("unexpected frame type: %s", reflect.ValueOf(&frame).Elem().Type().Name())
 	}
@@ -2133,10 +2141,17 @@ func (c *Conn) handleDatagramFrame(f *wire.DatagramFrame) error {
 	if f.Length(c.version) > wire.MaxDatagramSize {
 		return &qerr.TransportError{
 			ErrorCode:    qerr.ProtocolViolation,
-			ErrorMessage: "DATAGRAM frame too large",
+			ErrorMessage: fmt.Sprintf("DATAGRAM frame too large; max: %v, actual: %v", wire.MaxDatagramSize, f.Length(c.version)),
 		}
 	}
 	c.datagramQueue.HandleDatagramFrame(f)
+	return nil
+}
+
+func (s *Conn) handleTimestampFrame(_ *wire.TimestampFrame) error {
+	// app gets informed about timestamp in ReceivedShortHeaderPacket tracer
+	// nothing to do here
+
 	return nil
 }
 
@@ -3034,7 +3049,7 @@ func (c *Conn) SendDatagram(p []byte) error {
 		protocol.ByteCount(c.currentMTUEstimate.Load()),
 	)
 	if protocol.ByteCount(len(p)) > maxDataLen {
-		return &DatagramTooLargeError{MaxDatagramPayloadSize: int64(maxDataLen)}
+		return &DatagramTooLargeError{MaxDatagramPayloadSize: int64(maxDataLen), ActualSize: int64(protocol.ByteCount(len(p)))}
 	}
 	f.Data = make([]byte, len(p))
 	copy(f.Data, p)
@@ -3144,4 +3159,8 @@ func (c *Conn) NextConnection(ctx context.Context) (*Conn, error) {
 // connection ID length), and the size of the encryption tag.
 func estimateMaxPayloadSize(mtu protocol.ByteCount) protocol.ByteCount {
 	return mtu - 1 /* type byte */ - 20 /* maximum connection ID length */ - 16 /* tag size */
+}
+
+func (c *Conn) SetPacerRate(rateBytes uint) {
+	c.sentPacketHandler.SetPacerRate(protocol.ByteCount(rateBytes))
 }
