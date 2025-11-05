@@ -38,6 +38,8 @@ const (
 
 	FrameTypeDatagramNoLength   FrameType = 0x30
 	FrameTypeDatagramWithLength FrameType = 0x31
+
+	FrameTypeTimestamp FrameType = 0x32
 )
 
 func (t FrameType) IsStreamFrameType() bool {
@@ -61,7 +63,7 @@ func (t FrameType) isAllowedAtEncLevel(encLevel protocol.EncryptionLevel) bool {
 	switch encLevel {
 	case protocol.EncryptionInitial, protocol.EncryptionHandshake:
 		switch t {
-		case FrameTypeCrypto, FrameTypeAck, FrameTypeAckECN, FrameTypeConnectionClose, FrameTypePing:
+		case FrameTypeCrypto, FrameTypeAck, FrameTypeAckECN, FrameTypeConnectionClose, FrameTypePing, FrameTypeTimestamp:
 			return true
 		default:
 			return false
