@@ -39,6 +39,26 @@ type ClientToken struct {
 	rtt  time.Duration
 }
 
+type CCType int
+
+const (
+	// default cc - Reno
+	DefaultCC CCType = iota
+	// no cc, no pacer
+	DisabledCC
+	// only a pacer, no cc
+	PacerOnly
+)
+
+type PacerType int
+
+const (
+	// default pacer of quic-go
+	DefaultPacer PacerType = iota
+	// a pacer based on the set rate (conn.SetPaceRate)
+	RatePacer
+)
+
 type TokenStore interface {
 	// Pop searches for a ClientToken associated with the given key.
 	// Since tokens are not supposed to be reused, it must remove the token from the cache.
@@ -190,6 +210,14 @@ type Config struct {
 	// See https://datatracker.ietf.org/doc/html/draft-ietf-quic-reliable-stream-reset-07.
 	EnableStreamResetPartialDelivery bool
 	Tracer                           func(context.Context, logging.Perspective, ConnectionID) *logging.ConnectionTracer
+	// What CC to use: Reno, none or pacer only
+	CcType CCType
+	// What pacer to use: default quic-go pacer or rate based pacer
+	PacerType PacerType
+	// Disables the packet number skipping of quic. Use with care.
+	DisablePnSkips bool
+	// Send timestamp frame with each packet.
+	SendTimestamps bool
 }
 
 // ClientHelloInfo contains information about an incoming connection attempt.

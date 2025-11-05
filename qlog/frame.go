@@ -63,6 +63,8 @@ func (f frame) MarshalJSONObject(enc *gojay.Encoder) {
 		marshalAckFrequencyFrame(enc, frame)
 	case *logging.ImmediateAckFrame:
 		marshalImmediateAckFrame(enc, frame)
+	case *logging.TimestampFrame:
+		marshalTimestampFrame(enc, frame)
 	default:
 		panic("unknown frame type")
 	}
@@ -247,4 +249,9 @@ func marshalAckFrequencyFrame(enc *gojay.Encoder, f *logging.AckFrequencyFrame) 
 
 func marshalImmediateAckFrame(enc *gojay.Encoder, _ *logging.ImmediateAckFrame) {
 	enc.StringKey("frame_type", "immediate_ack")
+}
+
+func marshalTimestampFrame(enc *gojay.Encoder, f *logging.TimestampFrame) {
+	enc.StringKey("frame_type", "timestamp")
+	enc.Uint64Key("timestamp", f.Timestamp)
 }

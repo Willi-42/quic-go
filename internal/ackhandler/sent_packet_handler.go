@@ -111,6 +111,8 @@ type sentPacketHandler struct {
 
 	tracer *logging.ConnectionTracer
 	logger utils.Logger
+
+	pacerType congestion.InternalpacerType
 }
 
 var (
@@ -130,35 +132,59 @@ func newSentPacketHandler(
 	pers protocol.Perspective,
 	tracer *logging.ConnectionTracer,
 	logger utils.Logger,
+	ccType congestion.InternalccType,
+	disablePnSkips bool,
+	pacerType congestion.InternalpacerType,
 ) *sentPacketHandler {
-	congestion := congestion.NewCubicSender(
-		congestion.DefaultClock{},
-		rttStats,
-		connStats,
-		initialMaxDatagramSize,
-		true, // use Reno
-		tracer,
-	)
+
+	var cc congestion.SendAlgorithmWithDebugInfos
+
+	switch ccType {
+	case congestion.DefaultCC:
+		cc = congestion.NewCubicSender(
+			congestion.DefaultClock{},
+			rttStats,
+			connStats,
+			initialMaxDatagramSize,
+			true, // use Reno
+			tracer,
+			pacerType,
+		)
+	case congestion.PacerOnly:
+		cc = congestion.NewPacerOnlySendAlgorithm(congestion.DefaultClock{},
+			rttStats,
+			initialMaxDatagramSize,
+			tracer,
+			pacerType,
+		)
+	case congestion.DisabledCC:
+		cc = congestion.NoOpSendAlgorithm{}
+	}
 
 	h := &sentPacketHandler{
 		peerCompletedAddressValidation: pers == protocol.PerspectiveServer,
 		peerAddressValidated:           pers == protocol.PerspectiveClient || clientAddressValidated,
 		initialPackets:                 newPacketNumberSpace(initialPN, false),
 		handshakePackets:               newPacketNumberSpace(0, false),
-		appDataPackets:                 newPacketNumberSpace(0, true),
+		appDataPackets:                 newPacketNumberSpace(0, !disablePnSkips),
 		lostPackets:                    *newLostPacketTracker(64),
 		rttStats:                       rttStats,
 		connStats:                      connStats,
-		congestion:                     congestion,
+		congestion:                     cc,
 		perspective:                    pers,
 		tracer:                         tracer,
 		logger:                         logger,
+		pacerType:                      pacerType,
 	}
 	if enableECN {
 		h.enableECN = true
 		h.ecnTracker = newECNTracker(logger, tracer)
 	}
 	return h
+}
+
+func (h *sentPacketHandler) SetPacerRate(rate protocol.ByteCount) {
+	h.congestion.SetPacerRate(rate)
 }
 
 func (h *sentPacketHandler) removeFromBytesInFlight(p *packet) {
@@ -1064,6 +1090,7 @@ func (h *sentPacketHandler) MigratedPath(now monotime.Time, initialMaxDatagramSi
 		initialMaxDatagramSize,
 		true, // use Reno
 		h.tracer,
+		h.pacerType,
 	)
 	h.setLossDetectionTimer(now)
 }

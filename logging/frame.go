@@ -48,6 +48,8 @@ type (
 	AckFrequencyFrame = wire.AckFrequencyFrame
 	// An ImmediateAckFrame is an IMMEDIATE_ACK frame.
 	ImmediateAckFrame = wire.ImmediateAckFrame
+	// A TimestampFrame is a TIMESTAMP frame.
+	TimestampFrame = wire.TimestampFrame
 )
 
 // A CryptoFrame is a CRYPTO frame.
