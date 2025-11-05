@@ -2,6 +2,7 @@ package quic
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -33,5 +34,6 @@ func TestDatagramTooLargeError(t *testing.T) {
 		&DatagramTooLargeError{MaxDatagramPayloadSize: 1024},
 		&DatagramTooLargeError{MaxDatagramPayloadSize: 1025},
 	))
-	require.Equal(t, "DATAGRAM frame too large", (&DatagramTooLargeError{MaxDatagramPayloadSize: 1024}).Error())
+	errMsg := fmt.Sprintf("DATAGRAM frame too large; max: %v, actual: %v", 1024, 42)
+	require.Equal(t, errMsg, (&DatagramTooLargeError{MaxDatagramPayloadSize: 1024, ActualSize: 42}).Error())
 }
