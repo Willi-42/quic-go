@@ -338,5 +338,6 @@ func (c *cubicSender) SetMaxDatagramSize(s protocol.ByteCount) {
 	c.pacer.SetMaxDatagramSize(s)
 }
 
-func (c *cubicSender) SetPacerRate(protocol.ByteCount) {
+func (c *cubicSender) SetPacerRate(b protocol.ByteCount) {
+	c.pacer.SetRate(b)
 }
