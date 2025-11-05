@@ -52,6 +52,8 @@ type (
 	AckFrequencyFrame = wire.AckFrequencyFrame
 	// An ImmediateAckFrame is an IMMEDIATE_ACK frame.
 	ImmediateAckFrame = wire.ImmediateAckFrame
+	// A TimestampFrame is a TIMESTAMP frame.
+	TimestampFrame = wire.TimestampFrame
 )
 
 type AckRange = wire.AckRange
@@ -133,6 +135,8 @@ func (f Frame) Encode(enc *jsontext.Encoder) error {
 		return encodeAckFrequencyFrame(enc, frame)
 	case *ImmediateAckFrame:
 		return encodeImmediateAckFrame(enc, frame)
+	case *TimestampFrame:
+		return encodeTimestampFrame(enc, frame)
 	default:
 		panic("unknown frame type")
 	}
@@ -476,6 +480,17 @@ func encodeImmediateAckFrame(enc *jsontext.Encoder, _ *ImmediateAckFrame) error 
 	h.WriteToken(jsontext.BeginObject)
 	h.WriteToken(jsontext.String("frame_type"))
 	h.WriteToken(jsontext.String("immediate_ack"))
+	h.WriteToken(jsontext.EndObject)
+	return h.err
+}
+
+func encodeTimestampFrame(enc *jsontext.Encoder, f *TimestampFrame) error {
+	h := encoderHelper{enc: enc}
+	h.WriteToken(jsontext.BeginObject)
+	h.WriteToken(jsontext.String("frame_type"))
+	h.WriteToken(jsontext.String("timestamp"))
+	h.WriteToken(jsontext.String("timestamp"))
+	h.WriteToken(jsontext.Uint(f.Timestamp))
 	h.WriteToken(jsontext.EndObject)
 	return h.err
 }

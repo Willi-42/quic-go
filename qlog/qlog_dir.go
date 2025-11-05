@@ -59,3 +59,21 @@ func defaultConnectionTracerWithSchemas(isClient bool, connID ConnectionID, even
 	go fileSeq.Run()
 	return fileSeq
 }
+
+// DefaultConnectionTracerWithName creates qlog file with a custom name and path
+// pathTOQlog = "path/to/filename.qlog"
+func DefaultConnectionTracerWithName(_ context.Context, isClient bool, connID ConnectionID, pathToQlog string) qlogwriter.Trace {
+	f, err := os.Create(pathToQlog)
+	if err != nil {
+		log.Printf("Failed to create qlog file %s: %s", pathToQlog, err.Error())
+		return nil
+	}
+	fileSeq := qlogwriter.NewConnectionFileSeq(
+		utils.NewBufferedWriteCloser(bufio.NewWriter(f), f),
+		isClient,
+		connID,
+		[]string{EventSchema},
+	)
+	go fileSeq.Run()
+	return fileSeq
+}

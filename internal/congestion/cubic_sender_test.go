@@ -54,6 +54,7 @@ func newTestCubicSender(cubic bool) *testCubicSender {
 			initialCongestionWindowPackets*maxDatagramSize,
 			MaxCongestionWindow,
 			nil,
+			DefaultPacer,
 		),
 	}
 }
@@ -501,6 +502,7 @@ func TestCubicSenderSlowStartsUpToMaximumCongestionWindow(t *testing.T) {
 		initialCongestionWindowPackets*maxDatagramSize,
 		initialMaxCongestionWindow,
 		nil,
+		DefaultPacer,
 	)
 
 	for i := 1; i < protocol.MaxCongestionWindowPackets; i++ {
@@ -528,6 +530,7 @@ func TestCubicSenderSlowStartsPacketSizeIncrease(t *testing.T) {
 		initialCongestionWindowPackets*maxDatagramSize,
 		initialMaxCongestionWindow,
 		nil,
+		DefaultPacer,
 	)
 	const packetSize = initialMaxDatagramSize + 100
 	sender.SetMaxDatagramSize(packetSize)
@@ -552,6 +555,7 @@ func TestCubicSenderLimitCwndIncreaseInCongestionAvoidance(t *testing.T) {
 		initialCongestionWindowPackets*maxDatagramSize,
 		MaxCongestionWindow,
 		nil,
+		DefaultPacer,
 	)
 	testSender := &testCubicSender{
 		sender:   sender,
