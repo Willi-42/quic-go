@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/quic-go/quic-go/internal/ackhandler"
@@ -55,6 +56,10 @@ type SendStream struct {
 	deadline  monotime.Time
 
 	flowController flowcontrol.StreamFlowController
+
+	// for prio scheduling
+	prio atomic.Uint32
+	inc  atomic.Bool
 }
 
 var (
@@ -77,9 +82,27 @@ func newSendStream(
 		writeChan:             make(chan struct{}, 1),
 		writeOnce:             make(chan struct{}, 1), // cap: 1, to protect against concurrent use of Write
 		supportsResetStreamAt: supportsResetStreamAt,
+		prio:                  atomic.Uint32{},
+		inc:                   atomic.Bool{},
 	}
 	s.ctx, s.ctxCancel = context.WithCancelCause(ctx)
 	return s
+}
+
+func (s *SendStream) priority() uint32 {
+	return s.prio.Load()
+}
+
+func (s *SendStream) incremental() bool {
+	return s.inc.Load()
+}
+
+func (s *SendStream) SetPriority(p uint32) {
+	s.prio.Store(p)
+}
+
+func (s *SendStream) SetIncremental(b bool) {
+	s.inc.Store(b)
 }
 
 // StreamID returns the stream ID.

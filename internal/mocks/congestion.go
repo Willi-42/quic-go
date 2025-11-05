@@ -36,6 +36,9 @@ func NewMockSendAlgorithmWithDebugInfos(ctrl *gomock.Controller) *MockSendAlgori
 	return mock
 }
 
+func (c *MockSendAlgorithmWithDebugInfos) SetPacerRate(protocol.ByteCount) {
+}
+
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockSendAlgorithmWithDebugInfos) EXPECT() *MockSendAlgorithmWithDebugInfosMockRecorder {
 	return m.recorder
