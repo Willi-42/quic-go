@@ -335,6 +335,13 @@ func TestFrameParserFrames(t *testing.T) {
 			frameType: FrameTypeImmediateAck,
 			frame:     &ImmediateAckFrame{},
 		},
+		{
+			name:      "TIMESTAMP",
+			frameType: FrameTypeTimestamp,
+			frame: &TimestampFrame{
+				Timestamp: 0x1234567890abcdef,
+			},
+		},
 	}
 
 	for _, test := range tests {

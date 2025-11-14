@@ -35,6 +35,8 @@ type SentPacketHandler interface {
 	OnLossDetectionTimeout(now monotime.Time) error
 
 	MigratedPath(now monotime.Time, initialMaxPacketSize protocol.ByteCount)
+
+	SetPacerRate(protocol.ByteCount)
 }
 
 type sentPacketTracker interface {
