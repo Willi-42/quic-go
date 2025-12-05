@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/quic-go/quic-go/internal/congestion"
 	"github.com/quic-go/quic-go/internal/protocol"
 	"github.com/quic-go/quic-go/quicvarint"
 )
@@ -125,5 +126,20 @@ func populateConfig(config *Config) *Config {
 		EnableStreamResetPartialDelivery: config.EnableStreamResetPartialDelivery,
 		Allow0RTT:                        config.Allow0RTT,
 		Tracer:                           config.Tracer,
+		CcType:                           config.CcType,
+		DisablePnSkips:                   config.DisablePnSkips,
+		SendTimestamps:                   config.SendTimestamps,
+		PacerType:                        config.PacerType,
+		UsePriorityQueue:                 config.UsePriorityQueue,
 	}
+}
+
+func ccToInternalCC(ccType CCType) congestion.InternalccType {
+	toInt := int(ccType)
+	return congestion.InternalccType(toInt)
+}
+
+func pacerToInternalPacer(pacer PacerType) congestion.InternalpacerType {
+	toInt := int(pacer)
+	return congestion.InternalpacerType(toInt)
 }

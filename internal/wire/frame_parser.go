@@ -53,6 +53,7 @@ func (p *FrameParser) ParseType(b []byte, encLevel protocol.EncryptionLevel) (Fr
 		}
 		ft := FrameType(typ)
 		valid := ft.isValidRFC9000() ||
+			ft == FrameTypeTimestamp ||
 			(p.supportsDatagrams && ft.IsDatagramFrameType()) ||
 			(p.supportsResetStreamAt && ft == FrameTypeResetStreamAt) ||
 			(p.supportsAckFrequency && (ft == FrameTypeAckFrequency || ft == FrameTypeImmediateAck))
@@ -165,6 +166,8 @@ func (p *FrameParser) ParseLessCommonFrame(frameType FrameType, data []byte, v p
 		frame, l, err = parseAckFrequencyFrame(data, v)
 	case FrameTypeImmediateAck:
 		frame = &ImmediateAckFrame{}
+	case FrameTypeTimestamp:
+		frame, l, err = parseTimestampFrame(data, v)
 	default:
 		err = errUnknownFrameType
 	}

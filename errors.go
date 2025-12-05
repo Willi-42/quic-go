@@ -95,6 +95,7 @@ func (e *StreamError) Error() string {
 // DatagramTooLargeError is returned from Conn.SendDatagram if the payload is too large to be sent.
 type DatagramTooLargeError struct {
 	MaxDatagramPayloadSize int64
+	ActualSize             int64
 }
 
 func (e *DatagramTooLargeError) Is(target error) bool {
@@ -102,4 +103,6 @@ func (e *DatagramTooLargeError) Is(target error) bool {
 	return ok && e.MaxDatagramPayloadSize == t.MaxDatagramPayloadSize
 }
 
-func (e *DatagramTooLargeError) Error() string { return "DATAGRAM frame too large" }
+func (e *DatagramTooLargeError) Error() string {
+	return fmt.Sprintf("DATAGRAM frame too large; max: %v, actual: %v", e.MaxDatagramPayloadSize, e.ActualSize)
+}

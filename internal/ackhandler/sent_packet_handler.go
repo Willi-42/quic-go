@@ -109,6 +109,8 @@ type sentPacketHandler struct {
 	qlogger     qlogwriter.Recorder
 	lastMetrics qlog.MetricsUpdated
 	logger      utils.Logger
+
+	pacerType congestion.InternalpacerType
 }
 
 var _ SentPacketHandler = &sentPacketHandler{}
@@ -126,36 +128,61 @@ func NewSentPacketHandler(
 	pers protocol.Perspective,
 	qlogger qlogwriter.Recorder,
 	logger utils.Logger,
+	ccType congestion.InternalccType,
+	disablePnSkips bool,
+	pacerType congestion.InternalpacerType,
 ) SentPacketHandler {
-	congestion := congestion.NewCubicSender(
-		congestion.DefaultClock{},
-		rttStats,
-		connStats,
-		initialMaxDatagramSize,
-		true, // use Reno
-		qlogger,
-	)
+
+	var cc congestion.SendAlgorithmWithDebugInfos
+
+	switch ccType {
+	case congestion.DefaultCC:
+		cc = congestion.NewCubicSender(
+			congestion.DefaultClock{},
+			rttStats,
+			connStats,
+			initialMaxDatagramSize,
+			true, // use Reno
+			qlogger,
+			pacerType,
+		)
+	case congestion.PacerOnly:
+		cc = congestion.NewPacerOnlySendAlgorithm(congestion.DefaultClock{},
+			rttStats,
+			connStats,
+			initialMaxDatagramSize,
+			qlogger,
+			pacerType,
+		)
+	case congestion.DisabledCC:
+		cc = congestion.NoOpSendAlgorithm{}
+	}
 
 	h := &sentPacketHandler{
 		peerCompletedAddressValidation: pers == protocol.PerspectiveServer,
 		peerAddressValidated:           pers == protocol.PerspectiveClient || clientAddressValidated,
 		initialPackets:                 newPacketNumberSpace(initialPN, false),
 		handshakePackets:               newPacketNumberSpace(0, false),
-		appDataPackets:                 newPacketNumberSpace(0, true),
+		appDataPackets:                 newPacketNumberSpace(0, !disablePnSkips),
 		lostPackets:                    *newLostPacketTracker(64),
 		rttStats:                       rttStats,
 		connStats:                      connStats,
-		congestion:                     congestion,
+		congestion:                     cc,
 		ignorePacketsBelow:             ignorePacketsBelow,
 		perspective:                    pers,
 		qlogger:                        qlogger,
 		logger:                         logger,
+		pacerType:                      pacerType,
 	}
 	if enableECN {
 		h.enableECN = true
 		h.ecnTracker = newECNTracker(logger, qlogger)
 	}
 	return h
+}
+
+func (h *sentPacketHandler) SetPacerRate(rate protocol.ByteCount) {
+	h.congestion.SetPacerRate(rate)
 }
 
 func (h *sentPacketHandler) removeFromBytesInFlight(p *packet) {
@@ -1128,6 +1155,7 @@ func (h *sentPacketHandler) MigratedPath(now monotime.Time, initialMaxDatagramSi
 		initialMaxDatagramSize,
 		true, // use Reno
 		h.qlogger,
+		h.pacerType,
 	)
 	h.setLossDetectionTimer(now)
 }

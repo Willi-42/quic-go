@@ -108,3 +108,7 @@ func (p *pacer) TimeUntilSend() monotime.Time {
 func (p *pacer) SetMaxDatagramSize(s protocol.ByteCount) {
 	p.maxDatagramSize = s
 }
+
+func (p *pacer) SetRate(protocol.ByteCount) {
+	// do nothing
+}

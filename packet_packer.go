@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"time"
 
 	"github.com/quic-go/quic-go/internal/ackhandler"
 	"github.com/quic-go/quic-go/internal/handshake"
@@ -135,6 +136,8 @@ type packetPacker struct {
 	rand                rand.Rand
 
 	numNonAckElicitingAcks int
+
+	sendTimestamps bool
 }
 
 var _ packer = &packetPacker{}
@@ -151,6 +154,7 @@ func newPacketPacker(
 	acks ackFrameSource,
 	datagramQueue *datagramQueue,
 	perspective protocol.Perspective,
+	sendTimestamps bool,
 ) *packetPacker {
 	var b [16]byte
 	_, _ = crand.Read(b[:])
@@ -168,6 +172,7 @@ func newPacketPacker(
 		acks:                acks,
 		rand:                *rand.New(rand.NewPCG(binary.BigEndian.Uint64(b[:8]), binary.BigEndian.Uint64(b[8:]))),
 		pnManager:           packetNumberManager,
+		sendTimestamps:      sendTimestamps,
 	}
 }
 
@@ -633,9 +638,19 @@ func (p *packetPacker) composeNextPacket(
 	now monotime.Time,
 	v protocol.Version,
 ) payload {
+	// timestamp frame
+	tsframe := wire.TimestampFrame{Timestamp: uint64(time.Now().UnixMicro())}
+	tsLen := tsframe.Length(v)
+	tsAdded := false
+
 	if onlyAck {
 		if ack := p.acks.GetAckFrame(protocol.Encryption1RTT, now, true); ack != nil {
-			return payload{ack: ack, length: ack.Length(v)}
+			pl := payload{ack: ack, length: ack.Length(v)}
+			if p.sendTimestamps {
+				pl.frames = append(pl.frames, ackhandler.Frame{Frame: &tsframe})
+				pl.length += tsLen
+			}
+			return pl
 		}
 		return payload{}
 	}
@@ -656,10 +671,17 @@ func (p *packetPacker) composeNextPacket(
 	if p.datagramQueue != nil {
 		if f := p.datagramQueue.Peek(); f != nil {
 			size := f.Length(v)
-			if size <= maxPayloadSize-pl.length { // DATAGRAM frame fits
+			if size <= maxPayloadSize-pl.length-tsLen { // DATAGRAM frame fits
 				pl.frames = append(pl.frames, ackhandler.Frame{Frame: f})
 				pl.length += size
 				p.datagramQueue.Pop()
+
+				if p.sendTimestamps {
+					pl.frames = append(pl.frames, ackhandler.Frame{Frame: &tsframe})
+					pl.length += tsLen
+					tsAdded = true
+				}
+
 			} else if !hasAck {
 				// The DATAGRAM frame doesn't fit, and the packet doesn't contain an ACK.
 				// Discard this frame. There's no point in retrying this in the next packet,
@@ -671,10 +693,20 @@ func (p *packetPacker) composeNextPacket(
 	}
 
 	if hasAck && !hasData && !hasRetransmission {
+		if p.sendTimestamps && !tsAdded {
+			pl.frames = append(pl.frames, ackhandler.Frame{Frame: &tsframe})
+			pl.length += tsLen
+		}
 		return pl
 	}
 
 	if hasRetransmission {
+		if p.sendTimestamps && !tsAdded && pl.length+tsLen <= maxPayloadSize-pl.length {
+			pl.frames = append(pl.frames, ackhandler.Frame{Frame: &tsframe})
+			pl.length += tsLen
+			tsAdded = true
+		}
+
 		for {
 			remainingLen := maxPayloadSize - pl.length
 			if remainingLen < protocol.MinStreamFrameSize {
@@ -690,10 +722,17 @@ func (p *packetPacker) composeNextPacket(
 	}
 
 	if hasData {
+		// add timestamp first
+		if p.sendTimestamps && !tsAdded && pl.length+tsLen <= maxPayloadSize-pl.length {
+			pl.frames = append(pl.frames, ackhandler.Frame{Frame: &tsframe})
+			pl.length += tsLen
+		}
+
 		var lengthAdded protocol.ByteCount
 		startLen := len(pl.frames)
 		pl.frames, pl.streamFrames, lengthAdded = p.framer.Append(pl.frames, pl.streamFrames, maxPayloadSize-pl.length, now, v)
 		pl.length += lengthAdded
+
 		// add handlers for the control frames that were added
 		for i := startLen; i < len(pl.frames); i++ {
 			if pl.frames[i].Handler != nil {
@@ -703,6 +742,8 @@ func (p *packetPacker) composeNextPacket(
 			case *wire.PathChallengeFrame, *wire.PathResponseFrame:
 				// Path probing is currently not supported, therefore we don't need to set the OnAcked callback yet.
 				// PATH_CHALLENGE and PATH_RESPONSE are never retransmitted.
+			case *wire.TimestampFrame:
+				// Timestamp Frames are never retransmitted.
 			default:
 				// we might be packing a 0-RTT packet, but we need to use the 1-RTT ack handler anyway
 				pl.frames[i].Handler = p.retransmissionQueue.AckHandler(protocol.Encryption1RTT)

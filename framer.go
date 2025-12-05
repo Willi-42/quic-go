@@ -1,13 +1,16 @@
 package quic
 
 import (
+	"container/heap"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/quic-go/quic-go/internal/ackhandler"
 	"github.com/quic-go/quic-go/internal/flowcontrol"
 	"github.com/quic-go/quic-go/internal/monotime"
 	"github.com/quic-go/quic-go/internal/protocol"
+	"github.com/quic-go/quic-go/internal/utils/priorityqueue"
 	"github.com/quic-go/quic-go/internal/utils/ringbuffer"
 	"github.com/quic-go/quic-go/internal/wire"
 	"github.com/quic-go/quic-go/quicvarint"
@@ -24,6 +27,8 @@ const maxStreamControlFrameSize = 25
 
 type streamFrameGetter interface {
 	popStreamFrame(protocol.ByteCount, protocol.Version) (ackhandler.StreamFrame, *wire.StreamDataBlockedFrame, bool)
+	priority() uint32
+	incremental() bool
 }
 
 type streamControlFrameGetter interface {
@@ -34,6 +39,7 @@ type framer struct {
 	mutex sync.Mutex
 
 	activeStreams            map[protocol.StreamID]streamFrameGetter
+	streamPrioQueue          priorityqueue.PriorityQueue
 	streamQueue              ringbuffer.RingBuffer[protocol.StreamID]
 	streamsWithControlFrames map[protocol.StreamID]streamControlFrameGetter
 
@@ -42,19 +48,28 @@ type framer struct {
 	pathResponses              []*wire.PathResponseFrame
 	connFlowController         flowcontrol.ConnectionFlowController
 	queuedTooManyControlFrames bool
+
+	prioQueue bool
 }
 
-func newFramer(connFlowController flowcontrol.ConnectionFlowController) *framer {
+func newFramer(connFlowController flowcontrol.ConnectionFlowController, usePrioQueue bool) *framer {
 	return &framer{
 		activeStreams:            make(map[protocol.StreamID]streamFrameGetter),
 		streamsWithControlFrames: make(map[protocol.StreamID]streamControlFrameGetter),
 		connFlowController:       connFlowController,
+		prioQueue:                usePrioQueue,
 	}
 }
 
 func (f *framer) HasData() bool {
 	f.mutex.Lock()
-	hasData := !f.streamQueue.Empty()
+	var hasData bool
+	if f.prioQueue {
+		hasData = !f.streamPrioQueue.Empty()
+	} else {
+		hasData = !f.streamQueue.Empty()
+	}
+
 	f.mutex.Unlock()
 	if hasData {
 		return true
@@ -101,10 +116,9 @@ func (f *framer) Append(
 	var streamFrameLen protocol.ByteCount
 	f.mutex.Lock()
 	// pop STREAM frames, until less than 128 bytes are left in the packet
-	numActiveStreams := f.streamQueue.Len()
-	for i := 0; i < numActiveStreams; i++ {
+	doIteration := func() bool {
 		if protocol.MinStreamFrameSize > maxLen {
-			break
+			return false
 		}
 		sf, blocked := f.getNextStreamFrame(maxLen, v)
 		if sf.Frame != nil {
@@ -120,11 +134,27 @@ func (f *framer) Append(
 			// In case it doesn't fit, queue it for the next packet.
 			if maxLen < l {
 				f.controlFrames = append(f.controlFrames, blocked)
-				break
+				return false
 			}
 			frames = append(frames, ackhandler.Frame{Frame: blocked})
 			maxLen -= l
 			controlFrameLen += l
+		}
+		return true
+	}
+
+	if f.prioQueue {
+		for !f.streamPrioQueue.Empty() {
+			if !doIteration() {
+				break
+			}
+		}
+	} else {
+		numActiveStreams := f.streamQueue.Len()
+		for i := 0; i < numActiveStreams; i++ {
+			if !doIteration() {
+				break
+			}
 		}
 	}
 
@@ -221,7 +251,15 @@ func (f *framer) QueuedTooManyControlFrames() bool {
 func (f *framer) AddActiveStream(id protocol.StreamID, str streamFrameGetter) {
 	f.mutex.Lock()
 	if _, ok := f.activeStreams[id]; !ok {
-		f.streamQueue.PushBack(id)
+		if f.prioQueue {
+			heap.Push(&f.streamPrioQueue, &priorityqueue.Item{
+				Value:     int64(id),
+				Timestamp: time.Now(),
+				Priority:  int(str.priority()),
+			})
+		} else {
+			f.streamQueue.PushBack(id)
+		}
 		f.activeStreams[id] = str
 	}
 	f.mutex.Unlock()
@@ -246,7 +284,15 @@ func (f *framer) RemoveActiveStream(id protocol.StreamID) {
 }
 
 func (f *framer) getNextStreamFrame(maxLen protocol.ByteCount, v protocol.Version) (ackhandler.StreamFrame, *wire.StreamDataBlockedFrame) {
-	id := f.streamQueue.PopFront()
+	var id protocol.StreamID
+	var item *priorityqueue.Item
+	if f.prioQueue {
+		item = heap.Pop(&f.streamPrioQueue).(*priorityqueue.Item)
+		id = protocol.StreamID(item.Value)
+	} else {
+		id = f.streamQueue.PopFront()
+	}
+
 	// This should never return an error. Better check it anyway.
 	// The stream will only be in the streamQueue, if it enqueued itself there.
 	str, ok := f.activeStreams[id]
@@ -260,7 +306,20 @@ func (f *framer) getNextStreamFrame(maxLen protocol.ByteCount, v protocol.Versio
 	maxLen += protocol.ByteCount(quicvarint.Len(uint64(maxLen)))
 	frame, blocked, hasMoreData := str.popStreamFrame(maxLen, v)
 	if hasMoreData { // put the stream back in the queue (at the end)
-		f.streamQueue.PushBack(id)
+		if f.prioQueue {
+			ts := item.Timestamp
+			if str.incremental() {
+				ts = time.Now()
+			}
+
+			heap.Push(&f.streamPrioQueue, &priorityqueue.Item{
+				Value:     int64(item.Value),
+				Timestamp: ts,
+				Priority:  int(str.priority()),
+			})
+		} else {
+			f.streamQueue.PushBack(id)
+		}
 	} else { // no more data to send. Stream is not active
 		delete(f.activeStreams, id)
 	}
@@ -275,8 +334,11 @@ func (f *framer) Handle0RTTRejection() {
 	defer f.mutex.Unlock()
 	f.controlFrameMutex.Lock()
 	defer f.controlFrameMutex.Unlock()
-
-	f.streamQueue.Clear()
+	if f.prioQueue {
+		f.streamPrioQueue.Clear()
+	} else {
+		f.streamQueue.Clear()
+	}
 	for id := range f.activeStreams {
 		delete(f.activeStreams, id)
 	}
