@@ -128,6 +128,12 @@ func configWithNonZeroNonFunctionFields(t *testing.T) *Config {
 			f.Set(reflect.ValueOf(true))
 		case "EnableStreamResetPartialDelivery":
 			f.Set(reflect.ValueOf(true))
+		case "DisablePnSkips":
+			f.Set(reflect.ValueOf(false))
+		case "SendTimestamps":
+			f.Set(reflect.ValueOf(false))
+		case "CcType":
+			f.Set(reflect.ValueOf(DefaultCC))
 		default:
 			t.Fatalf("all fields must be accounted for, but saw unknown field %q", fn)
 		}
